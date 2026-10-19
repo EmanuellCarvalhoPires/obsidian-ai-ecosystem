@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "id": "environment-variables",
+      "repo": "EmanuellCarvalhoPires/obsidian-environment-variables",
+      "name": "Environment Keys",
+      "description": {
+        "en": "Hide API tokens and other sensitive data from AI agents such as Claude Code, Codex and Antigravity. Store them encrypted, reference them by key, and let agents use them in requests without seeing the values.",
+        "pt": "Esconda tokens de API e outros dados sensíveis de agentes de IA como Claude Code, Codex e Antigravity. Guarde-os criptografados, referencie-os pela chave e deixe os agentes usá-los em requisições sem ver os valores."
+      },
+      "icon": "key-round",
+      "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "telegram-ai-gateway",
+      "repo": "EmanuellCarvalhoPires/obsidian-telegram-ai-gateway",
+      "name": "Telegram AI Gateway",
+      "description": {
+        "en": "Send notifications and approval requests with buttons to Telegram from AI agents and scripts, with strict security limits.",
+        "pt": "Envie notificações e pedidos de aprovação com botões para o Telegram a partir de agentes de IA e scripts, com limites rígidos de segurança."
+      },
+      "icon": "send",
+      "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "ai-templates",
+      "repo": "EmanuellCarvalhoPires/obsidian-ai-templates",
+      "name": "AI Templates",
+      "description": {
+        "en": "Deterministic Markdown templates for AI agents. Fill a template with JSON and get aligned tables, images in your attachment folder and notes saved where you want.",
+        "pt": "Templates Markdown determinísticos para agentes de IA. Preencha um template com JSON e receba tabelas alinhadas, imagens na pasta de anexos e notas salvas onde você quiser."
+      },
+      "icon": "file-spreadsheet",
+      "minEcosystemVersion": "1.0.0"
+    }
+  ]
+}

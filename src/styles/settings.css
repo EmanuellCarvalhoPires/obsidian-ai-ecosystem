@@ -1,0 +1,93 @@
+/* Styles of the settings area. Use Obsidian CSS variables; class names start with aie-. */
+.aie-status-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--size-4-2);
+  vertical-align: middle;
+}
+
+.aie-status-icon svg {
+  width: var(--icon-s);
+  height: var(--icon-s);
+}
+
+.aie-status-icon.aie-status-running {
+  color: var(--color-green);
+}
+
+.aie-status-icon.aie-status-alternative,
+.aie-status-icon.aie-status-waiting,
+.aie-status-icon.aie-status-conflict {
+  color: var(--text-warning);
+}
+
+.aie-status-icon.aie-status-stopped {
+  color: var(--text-error);
+}
+
+.aie-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--size-4-2);
+  padding: 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+}
+
+.aie-badge.aie-badge-warning {
+  color: var(--text-warning);
+}
+
+.aie-badge svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.aie-danger-zone {
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-2) var(--size-4-3);
+}
+
+.aie-danger-zone .setting-item-heading,
+.aie-danger-zone .setting-group-heading {
+  color: var(--text-error);
+}
+
+.aie-modal .aie-modal-error {
+  min-height: var(--size-4-4);
+  color: var(--text-error);
+  font-size: var(--font-ui-small);
+}
+
+.aie-modal-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--size-4-2);
+  vertical-align: middle;
+}
+
+.aie-modal-icon svg {
+  width: var(--icon-m);
+  height: var(--icon-m);
+}
+
+.aie-modal .aie-token-input {
+  width: 100%;
+  font-family: var(--font-monospace);
+}
+
+.aie-modal .aie-code {
+  margin: var(--size-4-2) 0 var(--size-4-3);
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background-color: var(--background-secondary);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
