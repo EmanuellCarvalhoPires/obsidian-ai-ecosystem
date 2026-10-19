@@ -308,6 +308,10 @@ export interface HubScriptOptions {
   timeoutSeconds?: number;
   /** May contain {{secret:NAME}}: resolved by Environment Keys directly into the child env. */
   env?: Record<string, string>;
+  /** Content written to the subprocess stdin and then closed. */
+  stdin?: string;
+  /** Cancellation signal to immediately terminate the running process. */
+  signal?: AbortSignal;
   onStdout?: (data: string) => void;
   onStderr?: (data: string) => void;
 }

@@ -84,7 +84,8 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
 
     this.addRibbonIcon("activity", t("core.ribbon.inspector"), () => void this.openInspector());
     this.addRibbonIcon("package-plus", t("core.ribbon.catalog"), () => void this.openCatalog());
-    this.addCommand({ id: "open-inspector", name: t("core.cmd.openInspector"), callback: () => void this.openInspector() });
+    this.addCommand({ id: "open-inspector", name: t("core.cmd.openInspector"), callback: () => void this.openInspector("sidebar") });
+    this.addCommand({ id: "open-inspector-tab", name: t("core.cmd.openInspectorTab"), callback: () => void this.openInspector("tab") });
     this.addCommand({ id: "open-catalog", name: t("core.cmd.openCatalog"), callback: () => void this.openCatalog() });
     this.addCommand({ id: "restart-server", name: t("core.cmd.restartServer"), callback: () => void this.restartServer() });
     this.addCommand({ id: "copy-mcp-url", name: t("core.cmd.copyMcpUrl"), callback: () => this.copyMcpUrl() });
@@ -168,8 +169,12 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     this.core.detector.clearCache();
   }
 
-  async openInspector(): Promise<void> {
-    await this.openView(INSPECTOR_VIEW_TYPE, "sidebar");
+  async openInspector(placement: "sidebar" | "tab" = "sidebar"): Promise<void> {
+    await this.openView(INSPECTOR_VIEW_TYPE, placement);
+  }
+
+  async openInspectorView(placement: "sidebar" | "tab" = "tab"): Promise<void> {
+    await this.openInspector(placement);
   }
 
   async openCatalog(): Promise<void> {
@@ -180,7 +185,11 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
 
   private async openView(type: string, placement: "sidebar" | "tab"): Promise<void> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null | undefined = workspace.getLeavesOfType(type)[0];
+    const leaves = workspace.getLeavesOfType(type);
+    const existing = leaves.find((l) =>
+      placement === "tab" ? l.getRoot() === workspace.rootSplit : l.getRoot() !== workspace.rootSplit,
+    );
+    let leaf: WorkspaceLeaf | null | undefined = existing ?? (placement === "tab" ? undefined : leaves[0]);
     if (!leaf) {
       leaf = placement === "sidebar" ? workspace.getRightLeaf(false) : workspace.getLeaf("tab");
       if (!leaf) return;

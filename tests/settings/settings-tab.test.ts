@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { Setting } from "obsidian";
+import { describe, expect, it, vi } from "vitest";
 import { AIEcosystemSettingTab } from "../../src/settings/settings-tab";
 import type { SettingsHost } from "../../src/settings/settings-tab";
 import { buildClaudeCommand, buildJsonConfig } from "../../src/settings/modals";
@@ -30,27 +31,77 @@ function makeHost(): SettingsHost {
   };
 }
 
-describe("settings tab definitions", () => {
+interface RenderedSetting {
+  heading: boolean;
+  name: string;
+  desc: string;
+}
+
+function renderTab(tab: AIEcosystemSettingTab): RenderedSetting[] {
+  (globalThis as Record<string, unknown>).createSpan = () => ({});
+  const makeContainer = (): Record<string, unknown> => ({
+    empty: () => undefined,
+    isShown: () => true,
+    createDiv: () => makeContainer(),
+    createSpan: () => ({ setAttribute: () => undefined }),
+  });
+  tab.containerEl = makeContainer() as never;
+
+  const rendered: RenderedSetting[] = [];
+  const currentMap = new WeakMap<Setting, RenderedSetting>();
+  const getEntry = (s: Setting): RenderedSetting => {
+    let entry = currentMap.get(s);
+    if (!entry) {
+      entry = { heading: false, name: "", desc: "" };
+      currentMap.set(s, entry);
+      rendered.push(entry);
+      (s as unknown as Record<string, unknown>).nameEl = {
+        prepend: () => undefined,
+        createSpan: () => ({ setAttribute: () => undefined }),
+      };
+    }
+    return entry;
+  };
+
+  const setHeadingSpy = vi.spyOn(Setting.prototype, "setHeading").mockImplementation(function (this: Setting) {
+    getEntry(this).heading = true;
+    return this;
+  });
+  const setNameSpy = vi.spyOn(Setting.prototype, "setName").mockImplementation(function (this: Setting, name: string | DocumentFragment) {
+    getEntry(this).name = typeof name === "string" ? name : "[fragment]";
+    return this;
+  });
+  const setDescSpy = vi.spyOn(Setting.prototype, "setDesc").mockImplementation(function (this: Setting, desc: string | DocumentFragment) {
+    getEntry(this).desc = typeof desc === "string" ? desc : "[fragment]";
+    return this;
+  });
+
+  try {
+    tab.display();
+  } finally {
+    setHeadingSpy.mockRestore();
+    setNameSpy.mockRestore();
+    setDescSpy.mockRestore();
+  }
+  return rendered;
+}
+
+describe("settings tab (imperative display)", () => {
   const host = makeHost();
   const tab = new AIEcosystemSettingTab({} as never, {} as never, host);
-  const definitions = tab.getSettingDefinitions();
+  const rendered = renderTab(tab);
 
-  it("has the five sections in order", () => {
-    const headings = definitions.map((d) => ("heading" in d ? d.heading : undefined)).filter((h) => h !== undefined);
+  it("does not define getSettingDefinitions (avoids Obsidian 1.13+ experimental settings freeze)", () => {
+    expect("getSettingDefinitions" in tab).toBe(false);
+  });
+
+  it("renders the sections in order", () => {
+    const headings = rendered.filter((r) => r.heading).map((r) => r.name);
     expect(headings).toEqual(["Server", "Clients", "Scripts", "Allowed script folders", "Danger zone", "Inspector", "Modules", "Services"]);
   });
 
   it("only binds control keys the store can read", () => {
-    const keys: string[] = [];
-    const collect = (items: unknown[]): void => {
-      for (const item of items) {
-        const def = item as { control?: { key: string }; items?: unknown[] };
-        if (def.control) keys.push(def.control.key);
-        if (def.items) collect(def.items);
-      }
-    };
-    collect(definitions);
-    expect(keys).toEqual([
+    const keys = [
       "port",
       "alternativePort",
       "scripts.maxTimeoutSeconds",
@@ -59,20 +110,19 @@ describe("settings tab definitions", () => {
       "scripts.interpreter.bash",
       "scripts.interpreter.powershell",
       "inspector.maxEntries",
-    ]);
+    ];
     for (const key of keys) expect(readSetting(host.settings, key), key).not.toBeUndefined();
     for (const key of keys) expect(tab.getControlValue(key)).toEqual(readSetting(host.settings, key));
   });
 
   it("lists the stored clients and folders", () => {
-    const clients = definitions.find((d) => "heading" in d && d.heading === "Clients") as { items: Array<{ name: string }> };
-    expect(clients.items.map((i) => i.name)).toEqual(["Claude Code"]);
-    const folders = definitions.find((d) => "heading" in d && d.heading === "Allowed script folders") as { items: Array<{ name: string }> };
-    expect(folders.items.map((i) => i.name)).toEqual(["Scripts"]);
+    const names = rendered.map((r) => r.name);
+    expect(names).toContain("Claude Code");
+    expect(names).toContain("Scripts");
   });
 
   it("contains no emoji", () => {
-    expect(EMOJI.test(JSON.stringify(definitions))).toBe(false);
+    expect(EMOJI.test(JSON.stringify(rendered))).toBe(false);
   });
 
   it("applies control values: restarts the server on a port change and saves", async () => {

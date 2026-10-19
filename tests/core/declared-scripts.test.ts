@@ -39,6 +39,14 @@ describe("extractDeclaredScript", () => {
     expect(extractDeclaredScript({ tags: ["mcp/script"], script: "../a.py" }, [])).toBeUndefined();
     expect(extractDeclaredScript({ tags: ["mcp/script"], script: "C:/a.py" }, [])).toBeUndefined();
   });
+
+  it("accepts ai-scripts notes with script_id and script_path without requiring mcp/script tag", () => {
+    expect(extractDeclaredScript({ script_id: "my_script", script_path: "Scripts/run.py" }, [])).toBe("Scripts/run.py");
+    expect(extractDeclaredScript({ script_id: "my_script", script_path: ".\\Scripts\\run.py" }, [])).toBe("Scripts/run.py");
+    expect(extractDeclaredScript({ script_id: "   ", script_path: "Scripts/run.py" }, [])).toBeUndefined();
+    expect(extractDeclaredScript({ script_id: "my_script", script_path: "../run.py" }, [])).toBeUndefined();
+    expect(extractDeclaredScript({ script_id: "my_script" }, [])).toBeUndefined();
+  });
 });
 
 describe("collectDeclaredScripts", () => {

@@ -39,6 +39,9 @@ function toVaultPath(value: string): string | undefined {
 export function extractDeclaredScript(frontmatter: unknown, tags: string[]): string | undefined {
   if (typeof frontmatter !== "object" || frontmatter === null || Array.isArray(frontmatter)) return undefined;
   const fm = frontmatter as Record<string, unknown>;
+  if (typeof fm.script_id === "string" && fm.script_id.trim() !== "" && typeof fm.script_path === "string") {
+    return toVaultPath(fm.script_path);
+  }
   const script = fm.script;
   if (typeof script !== "string") return undefined;
   const all = [...tags, ...frontmatterTags(fm)].map(cleanTag);

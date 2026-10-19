@@ -227,12 +227,17 @@ export class ScriptEngine {
   ): Promise<ScriptExecutionResult> {
     const { deps } = this;
     const isWindows = process.platform === "win32";
+    const hasStdin = options.stdin !== undefined;
     const spawnOptions = {
       cwd: plan.cwdAbs,
       shell: false,
       windowsHide: true,
       detached: !isWindows,
-      stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      stdio: (hasStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"]) as [
+        "ignore" | "pipe",
+        "pipe",
+        "pipe",
+      ],
     };
 
     const handle: ActivityHandle = deps.activity.begin({
@@ -251,6 +256,16 @@ export class ScriptEngine {
       alert: plan.unrestricted,
     });
     const startedAt = Date.now();
+    if (options.signal?.aborted) {
+      const durationMs = Date.now() - startedAt;
+      handle.end({
+        status: 408,
+        durationMs,
+        response: { exitCode: -1, killed: true },
+      });
+      return { exitCode: -1, stdout: "", stderr: "", durationMs, killed: true };
+    }
+
     const fail = (error: ScriptRefusedError): ScriptRefusedError => {
       handle.end({
         status: error.code === "interpreter-not-found" ? 500 : 403,
@@ -287,6 +302,12 @@ export class ScriptEngine {
     }
     const proc: ChildProcess = child;
 
+    if (options.stdin !== undefined && proc.stdin) {
+      proc.stdin.on("error", () => undefined);
+      proc.stdin.write(options.stdin, "utf8");
+      proc.stdin.end();
+    }
+
     let killed = false;
     const stdout = new LineStream((line) => {
       handle.appendOutput("stdout", line);
@@ -313,11 +334,23 @@ export class ScriptEngine {
       };
       this.running.add(running);
 
+      const onAbort = (): void => {
+        running.kill();
+      };
+      if (options.signal) {
+        if (options.signal.aborted) {
+          running.kill();
+        } else {
+          options.signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+
       const finish = (): void => {
         if (settled) return;
         settled = true;
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (closeTimer) clearTimeout(closeTimer);
+        options.signal?.removeEventListener("abort", onAbort);
         this.running.delete(running);
         stdout.end();
         stderr.end();
@@ -340,6 +373,7 @@ export class ScriptEngine {
         settled = true;
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (closeTimer) clearTimeout(closeTimer);
+        options.signal?.removeEventListener("abort", onAbort);
         this.running.delete(running);
         const message = err.code === "ENOENT" ? `Interpreter not found: ${command}` : `Could not start ${command}: ${err.message}`;
         reject(fail(new ScriptRefusedError("interpreter-not-found", deps.redact(message))));

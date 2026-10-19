@@ -153,6 +153,7 @@ export class InspectorView extends ItemView {
       const { workspace } = this.app;
       const currentlyTab = this.leaf.getRoot() === workspace.rootSplit;
       const targetLeaf = currentlyTab ? workspace.getRightLeaf(false) : workspace.getLeaf("tab");
+      if (!targetLeaf) return;
       void targetLeaf.setViewState({ type: INSPECTOR_VIEW_TYPE, active: true }).then(() => {
         void workspace.revealLeaf(targetLeaf);
       });

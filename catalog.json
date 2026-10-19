@@ -33,6 +33,17 @@
       },
       "icon": "file-spreadsheet",
       "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "ai-scripts",
+      "repo": "EmanuellCarvalhoPires/obsidian-ai-scripts",
+      "name": "AI Scripts",
+      "description": {
+        "en": "Manage, categorize and safely run local automation scripts for AI agents with parameter validation, real-time streaming execution view, and strict process control.",
+        "pt": "Gerencie, categorize e execute scripts de automação para agentes de IA com validação de parâmetros, painel de execução ao vivo em tempo real e controle estrito de processos."
+      },
+      "icon": "terminal",
+      "minEcosystemVersion": "1.0.0"
     }
   ]
 }

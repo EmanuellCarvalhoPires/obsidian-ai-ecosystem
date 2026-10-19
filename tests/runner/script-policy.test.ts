@@ -49,13 +49,15 @@ describe("validateRun: caller and shape", () => {
     }
   });
 
-  it("validates language, args and env", () => {
+  it("validates language, args, env and stdin", () => {
     expect(code(opts({ language: "ruby" as never }), ctx())).toBe("invalid-language");
     expect(code(opts({ args: [1 as never] }), ctx())).toBe("invalid-args");
     expect(code(opts({ env: { "1BAD": "x" } }), ctx())).toBe("invalid-env");
     expect(code(opts({ env: { "A-B": "x" } }), ctx())).toBe("invalid-env");
     expect(code(opts({ env: { A: 1 as never } }), ctx())).toBe("invalid-env");
     expect(code(opts({ env: { GOOD_1: "x" } }), ctx())).toBeUndefined();
+    expect(code(opts({ stdin: 123 as never }), ctx())).toBe("invalid-stdin");
+    expect(code(opts({ stdin: "hello" }), ctx())).toBeUndefined();
   });
 
   it("refuses interpreter-hijacking env keys only while restricted", () => {

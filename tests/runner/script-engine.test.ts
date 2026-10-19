@@ -218,6 +218,55 @@ describe("ScriptEngine: timeout and kill", () => {
     expect(results.every((r) => r.killed)).toBe(true);
     expect(eng.runningCount()).toBe(0);
   });
+
+  it("writes stdin to the subprocess and closes it", async () => {
+    writeFile(
+      vault,
+      "Scripts/stdin.js",
+      `let data = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { data += chunk; });
+process.stdin.on("end", () => { console.log("received:" + data); });`,
+    );
+    const result = await engine().run(
+      { language: "node", scriptPath: "Scripts/stdin.js", stdin: '{"hello":"world"}' },
+      caller,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.killed).toBe(false);
+    expect(result.stdout.trim()).toBe('received:{"hello":"world"}');
+  });
+
+  it("kills a running script when signal is aborted", async () => {
+    writeFile(vault, "Scripts/forever.js", forever);
+    const eng = engine();
+    const controller = new AbortController();
+    const runPromise = eng.run(
+      { language: "node", scriptPath: "Scripts/forever.js", signal: controller.signal },
+      caller,
+    );
+    const deadline = Date.now() + 10_000;
+    while (eng.runningCount() < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    expect(eng.runningCount()).toBe(1);
+    controller.abort();
+    const result = await runPromise;
+    expect(result.killed).toBe(true);
+    expect(rec.ends[0].status).toBe(408);
+    expect(eng.runningCount()).toBe(0);
+  });
+
+  it("finishes immediately as killed when signal is already aborted before spawn", async () => {
+    writeFile(vault, "Scripts/forever.js", forever);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await engine().run(
+      { language: "node", scriptPath: "Scripts/forever.js", signal: controller.signal },
+      caller,
+    );
+    expect(result.killed).toBe(true);
+    expect(result.exitCode).toBe(-1);
+    expect(rec.ends[0].status).toBe(408);
+  });
 });
 
 describe("ScriptEngine: secrets", () => {

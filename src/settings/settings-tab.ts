@@ -1,6 +1,6 @@
-// Settings tab (declarative, Obsidian 1.13+): server, clients, scripts, inspector, modules.
+// Settings tab (imperative, Obsidian-standard): server, clients, scripts, inspector, modules.
 import { PluginSettingTab, Setting, setIcon } from "obsidian";
-import type { App, Plugin, SettingDefinitionItem, SettingGroupItem } from "obsidian";
+import type { App, Plugin } from "obsidian";
 import { mcpUrl, presentServer } from "../core/notices";
 import { t } from "../i18n";
 import type { AIEcosystemSettings, ClientRecord, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
@@ -38,10 +38,10 @@ export interface SettingsHost {
 }
 
 const INTERPRETERS = [
-  { key: "scripts.interpreter.python", label: "settings.scripts.python" },
-  { key: "scripts.interpreter.node", label: "settings.scripts.node" },
-  { key: "scripts.interpreter.bash", label: "settings.scripts.bash" },
-  { key: "scripts.interpreter.powershell", label: "settings.scripts.powershell" },
+  { key: "python", label: "settings.scripts.python" },
+  { key: "node", label: "settings.scripts.node" },
+  { key: "bash", label: "settings.scripts.bash" },
+  { key: "powershell", label: "settings.scripts.powershell" },
 ] as const;
 
 function formatDate(iso: string | undefined): string {
@@ -56,10 +56,12 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     this.icon = "server";
   }
 
-  /** Re-renders the tab (status, modules and clients changed). Safe to call while the tab is closed. */
+  /** Re-renders the tab if currently visible. Safe to call while the tab is closed. */
   refresh(): void {
     try {
-      this.update();
+      if (this.containerEl && this.containerEl.isShown()) {
+        this.display();
+      }
     } catch (err) {
       console.debug("[AI Ecosystem] Could not refresh the settings tab", err);
     }
@@ -76,91 +78,102 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     if (effects.includes("interpreters")) this.host.onInterpretersChanged();
   }
 
-  getSettingDefinitions(): SettingDefinitionItem[] {
-    return [
-      this.serverGroup(),
-      this.clientsGroup(),
-      this.scriptsGroup(),
-      this.foldersGroup(),
-      this.dangerGroup(),
-      this.inspectorGroup(),
-      this.modulesGroup(),
-      this.servicesGroup(),
-      this.catalogGroup(),
-    ];
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    this.renderServerGroup(containerEl);
+    this.renderClientsGroup(containerEl);
+    this.renderScriptsGroup(containerEl);
+    this.renderFoldersGroup(containerEl);
+    this.renderDangerGroup(containerEl);
+    this.renderInspectorGroup(containerEl);
+    this.renderModulesGroup(containerEl);
+    this.renderServicesGroup(containerEl);
+    this.renderCatalogGroup(containerEl);
   }
 
   // ---- server -------------------------------------------------------------
 
-  private serverGroup(): SettingDefinitionItem {
+  private renderServerGroup(containerEl: HTMLElement): void {
     const { settings } = this.host;
-    return {
-      type: "group",
-      heading: t("settings.server.heading"),
-      items: [
-        {
-          name: t("settings.server.status"),
-          searchable: false,
-          render: (setting) => {
-            const view = presentServer(this.host.getServerStatus());
-            setting.setName(view.title);
-            if (view.detail) setting.setDesc(view.detail);
-            const icon = createSpan({ cls: `aie-status-icon aie-status-${view.state}` });
-            setIcon(icon, view.icon);
-            setting.nameEl.prepend(icon);
-          },
-        },
-        {
-          name: t("settings.server.port"),
-          desc: t("settings.server.portDesc"),
-          control: {
-            type: "number",
-            key: "port",
-            min: MIN_PORT,
-            max: MAX_PORT,
-            step: 1,
-            defaultValue: settings.port,
-            validate: (value: number) => this.validatePort(value, settings.alternativePort),
-          },
-        },
-        {
-          name: t("settings.server.altPort"),
-          desc: t("settings.server.altPortDesc"),
-          control: {
-            type: "number",
-            key: "alternativePort",
-            min: MIN_PORT,
-            max: MAX_PORT,
-            step: 1,
-            defaultValue: settings.alternativePort,
-            validate: (value: number) => this.validatePort(value, settings.port),
-          },
-        },
-        {
-          name: t("settings.server.actions"),
-          searchable: false,
-          render: (setting) => {
-            setting
-              .addButton((btn) =>
-                btn
-                  .setButtonText(t("settings.server.restart"))
-                  .setIcon("refresh-cw")
-                  .onClick(() => void this.host.restartServer()),
-              )
-              .addButton((btn) =>
-                btn
-                  .setButtonText(t("settings.server.copyUrl"))
-                  .setIcon("copy")
-                  .onClick(() => this.host.copyMcpUrl()),
-              );
-          },
-        },
-        {
-          name: t("settings.server.url"),
-          desc: mcpUrl(this.host.getServerStatus().port),
-        },
-      ],
-    };
+    new Setting(containerEl).setHeading().setName(t("settings.server.heading"));
+
+    // Server Status
+    const statusSetting = new Setting(containerEl);
+    const view = presentServer(this.host.getServerStatus());
+    statusSetting.setName(view.title);
+    if (view.detail) statusSetting.setDesc(view.detail);
+    const statusIcon = createSpan({ cls: `aie-status-icon aie-status-${view.state}` });
+    setIcon(statusIcon, view.icon);
+    statusSetting.nameEl.prepend(statusIcon);
+
+    // Port
+    new Setting(containerEl)
+      .setName(t("settings.server.port"))
+      .setDesc(t("settings.server.portDesc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_PORT);
+        text.inputEl.max = String(MAX_PORT);
+        text.setValue(String(settings.port));
+        text.onChange(async (val) => {
+          const num = parseInt(val, 10);
+          const err = this.validatePort(num, settings.alternativePort);
+          if (!err && num !== settings.port) {
+            text.inputEl.removeClass("has-error");
+            settings.port = num;
+            await this.host.saveSettings();
+            this.host.scheduleServerRestart();
+          } else if (err) {
+            text.inputEl.addClass("has-error");
+          }
+        });
+      });
+
+    // Alternative Port
+    new Setting(containerEl)
+      .setName(t("settings.server.altPort"))
+      .setDesc(t("settings.server.altPortDesc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_PORT);
+        text.inputEl.max = String(MAX_PORT);
+        text.setValue(String(settings.alternativePort));
+        text.onChange(async (val) => {
+          const num = parseInt(val, 10);
+          const err = this.validatePort(num, settings.port);
+          if (!err && num !== settings.alternativePort) {
+            text.inputEl.removeClass("has-error");
+            settings.alternativePort = num;
+            await this.host.saveSettings();
+            this.host.scheduleServerRestart();
+          } else if (err) {
+            text.inputEl.addClass("has-error");
+          }
+        });
+      });
+
+    // Actions
+    new Setting(containerEl)
+      .setName(t("settings.server.actions"))
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.server.restart"))
+          .setIcon("refresh-cw")
+          .onClick(() => void this.host.restartServer()),
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.server.copyUrl"))
+          .setIcon("copy")
+          .onClick(() => this.host.copyMcpUrl()),
+      );
+
+    // URL Display
+    new Setting(containerEl)
+      .setName(t("settings.server.url"))
+      .setDesc(mcpUrl(this.host.getServerStatus().port));
   }
 
   private validatePort(value: number, other: number): string | undefined {
@@ -171,25 +184,31 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
 
   // ---- clients ------------------------------------------------------------
 
-  private clientsGroup(): SettingDefinitionItem {
-    const items: SettingGroupItem[] = this.host.settings.clients.map((client) => ({
-      name: client.name,
-      searchable: false,
-      render: (setting: Setting) => this.renderClient(setting, client),
-    }));
-    return {
-      type: "list",
-      heading: t("settings.clients.heading"),
-      emptyState: t("settings.clients.empty"),
-      items,
-      addItem: {
-        name: t("settings.clients.add"),
-        action: () => this.promptClientName(),
-      },
-    };
+  private renderClientsGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setHeading()
+      .setName(t("settings.clients.heading"))
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.clients.add"))
+          .setIcon("plus")
+          .setCta()
+          .onClick(() => this.promptClientName()),
+      );
+
+    const { clients } = this.host.settings;
+    if (clients.length === 0) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("settings.clients.empty") });
+      return;
+    }
+
+    for (const client of clients) {
+      this.renderClient(containerEl, client);
+    }
   }
 
-  private renderClient(setting: Setting, client: ClientRecord): void {
+  private renderClient(containerEl: HTMLElement, client: ClientRecord): void {
+    const setting = new Setting(containerEl);
     setting.setName(client.name);
     setting.setDesc(
       t("settings.clients.details", {
@@ -218,7 +237,7 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
       submitText: t("settings.clients.create"),
       onSubmit: async (name) => {
         const { token } = await this.host.createClient(name);
-        this.refresh();
+        this.display();
         new NewClientModal(this.app, {
           clientName: name,
           token,
@@ -237,63 +256,91 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
       danger: true,
       onConfirm: async () => {
         await this.host.revokeClient(client.id);
-        this.refresh();
+        this.display();
       },
     }).open();
   }
 
   // ---- scripts ------------------------------------------------------------
 
-  private scriptsGroup(): SettingDefinitionItem {
-    return {
-      type: "group",
-      heading: t("settings.scripts.heading"),
-      items: [
-        {
-          name: t("settings.scripts.timeout"),
-          desc: t("settings.scripts.timeoutDesc"),
-          control: {
-            type: "number",
-            key: "scripts.maxTimeoutSeconds",
-            min: MIN_TIMEOUT_SECONDS,
-            max: MAX_TIMEOUT_SECONDS,
-            step: 1,
-            defaultValue: 300,
-            validate: (value: number) =>
-              Number.isFinite(value) && value >= MIN_TIMEOUT_SECONDS && value <= MAX_TIMEOUT_SECONDS
-                ? undefined
-                : t("settings.error.range", { min: MIN_TIMEOUT_SECONDS, max: MAX_TIMEOUT_SECONDS }),
-          },
-        },
-        ...INTERPRETERS.map(
-          (item): SettingGroupItem => ({
-            name: t(item.label),
-            desc: t("settings.scripts.interpreterDesc"),
-            control: { type: "text", key: item.key, placeholder: t("settings.scripts.autoDetect") },
-          }),
-        ),
-      ],
-    };
+  private renderScriptsGroup(containerEl: HTMLElement): void {
+    const { scripts } = this.host.settings;
+    new Setting(containerEl).setHeading().setName(t("settings.scripts.heading"));
+
+    new Setting(containerEl)
+      .setName(t("settings.scripts.timeout"))
+      .setDesc(t("settings.scripts.timeoutDesc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_TIMEOUT_SECONDS);
+        text.inputEl.max = String(MAX_TIMEOUT_SECONDS);
+        text.setValue(String(scripts.maxTimeoutSeconds));
+        text.onChange(async (val) => {
+          const num = parseInt(val, 10);
+          if (Number.isFinite(num) && num >= MIN_TIMEOUT_SECONDS && num <= MAX_TIMEOUT_SECONDS) {
+            text.inputEl.removeClass("has-error");
+            scripts.maxTimeoutSeconds = num;
+            await this.host.saveSettings();
+          } else {
+            text.inputEl.addClass("has-error");
+          }
+        });
+      });
+
+    for (const item of INTERPRETERS) {
+      new Setting(containerEl)
+        .setName(t(item.label))
+        .setDesc(t("settings.scripts.interpreterDesc"))
+        .addText((text) => {
+          text
+            .setPlaceholder(t("settings.scripts.autoDetect"))
+            .setValue(scripts.interpreterPaths[item.key] ?? "")
+            .onChange(async (val) => {
+              const trimmed = val.trim();
+              if (trimmed) {
+                scripts.interpreterPaths[item.key] = trimmed;
+              } else {
+                delete scripts.interpreterPaths[item.key];
+              }
+              await this.host.saveSettings();
+              this.host.onInterpretersChanged();
+            });
+        });
+    }
   }
 
-  private foldersGroup(): SettingDefinitionItem {
-    const folders = this.host.settings.scripts.allowedFolders;
-    return {
-      type: "list",
-      heading: t("settings.folders.heading"),
-      emptyState: t("settings.folders.empty"),
-      items: folders.map((folder): SettingGroupItem => ({ name: folder, searchable: false })),
-      onDelete: (index) => {
-        const current = this.host.settings.scripts.allowedFolders;
-        if (index < 0 || index >= current.length) return;
-        this.host.settings.scripts.allowedFolders = current.filter((_, i) => i !== index);
-        void this.host.saveSettings().then(() => this.refresh());
-      },
-      addItem: {
-        name: t("settings.folders.add"),
-        action: () => this.promptFolder(),
-      },
-    };
+  private renderFoldersGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setHeading()
+      .setName(t("settings.folders.heading"))
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.folders.add"))
+          .setIcon("plus")
+          .setCta()
+          .onClick(() => this.promptFolder()),
+      );
+
+    const { allowedFolders } = this.host.settings.scripts;
+    if (allowedFolders.length === 0) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("settings.folders.empty") });
+      return;
+    }
+
+    allowedFolders.forEach((folder, index) => {
+      new Setting(containerEl)
+        .setName(folder)
+        .addButton((btn) =>
+          btn
+            .setIcon("trash-2")
+            .setDestructive()
+            .onClick(async () => {
+              this.host.settings.scripts.allowedFolders = this.host.settings.scripts.allowedFolders.filter((_, i) => i !== index);
+              await this.host.saveSettings();
+              this.display();
+            }),
+        );
+    });
   }
 
   private promptFolder(): void {
@@ -314,37 +361,30 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
         const { scripts } = this.host.settings;
         if (!scripts.allowedFolders.includes(folder)) scripts.allowedFolders = [...scripts.allowedFolders, folder];
         await this.host.saveSettings();
-        this.refresh();
+        this.display();
       },
     }).open();
   }
 
-  private dangerGroup(): SettingDefinitionItem {
-    return {
-      type: "group",
-      heading: t("settings.danger.heading"),
-      cls: "aie-danger-zone",
-      items: [
-        {
-          name: t("settings.danger.toggle"),
-          desc: t("settings.danger.toggleDesc"),
-          render: (setting) => {
-            setting.addToggle((toggle) => {
-              toggle.setValue(this.host.settings.scripts.restrictionsDisabled).onChange((enabled) => {
-                if (!enabled) {
-                  this.host.settings.scripts.restrictionsDisabled = false;
-                  void this.host.saveSettings().then(() => this.refresh());
-                  return;
-                }
-                // Stay off until the user confirms.
-                toggle.setValue(false);
-                this.confirmUnrestricted();
-              });
-            });
-          },
-        },
-      ],
-    };
+  private renderDangerGroup(containerEl: HTMLElement): void {
+    const dangerDiv = containerEl.createDiv({ cls: "aie-danger-zone" });
+    new Setting(dangerDiv).setHeading().setName(t("settings.danger.heading"));
+
+    new Setting(dangerDiv)
+      .setName(t("settings.danger.toggle"))
+      .setDesc(t("settings.danger.toggleDesc"))
+      .addToggle((toggle) => {
+        toggle.setValue(this.host.settings.scripts.restrictionsDisabled).onChange((enabled) => {
+          if (!enabled) {
+            this.host.settings.scripts.restrictionsDisabled = false;
+            void this.host.saveSettings().then(() => this.display());
+            return;
+          }
+          // Stay off until the user confirms.
+          toggle.setValue(false);
+          this.confirmUnrestricted();
+        });
+      });
   }
 
   private confirmUnrestricted(): void {
@@ -361,113 +401,105 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
       onConfirm: async () => {
         this.host.settings.scripts.restrictionsDisabled = true;
         await this.host.saveSettings();
-        this.refresh();
+        this.display();
       },
     }).open();
   }
 
   // ---- inspector ----------------------------------------------------------
 
-  private inspectorGroup(): SettingDefinitionItem {
-    return {
-      type: "group",
-      heading: t("settings.inspector.heading"),
-      items: [
-        {
-          name: t("settings.inspector.maxEntries"),
-          desc: t("settings.inspector.maxEntriesDesc"),
-          control: {
-            type: "number",
-            key: "inspector.maxEntries",
-            min: MIN_ENTRIES,
-            max: MAX_ENTRIES,
-            step: 10,
-            defaultValue: 500,
-            validate: (value: number) =>
-              Number.isFinite(value) && value >= MIN_ENTRIES && value <= MAX_ENTRIES
-                ? undefined
-                : t("settings.error.range", { min: MIN_ENTRIES, max: MAX_ENTRIES }),
-          },
-        },
-        {
-          name: t("settings.inspector.open"),
-          desc: t("settings.inspector.openDesc"),
-          render: (setting) => {
-            setting.addButton((btn) =>
-              btn
-                .setButtonText(t("settings.inspector.openButton"))
-                .setIcon("activity")
-                .onClick(() => void this.host.openInspector()),
-            );
-          },
-        },
-      ],
-    };
+  private renderInspectorGroup(containerEl: HTMLElement): void {
+    const { inspector } = this.host.settings;
+    new Setting(containerEl).setHeading().setName(t("settings.inspector.heading"));
+
+    new Setting(containerEl)
+      .setName(t("settings.inspector.maxEntries"))
+      .setDesc(t("settings.inspector.maxEntriesDesc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_ENTRIES);
+        text.inputEl.max = String(MAX_ENTRIES);
+        text.inputEl.step = "10";
+        text.setValue(String(inspector.maxEntries));
+        text.onChange(async (val) => {
+          const num = parseInt(val, 10);
+          if (Number.isFinite(num) && num >= MIN_ENTRIES && num <= MAX_ENTRIES) {
+            text.inputEl.removeClass("has-error");
+            inspector.maxEntries = num;
+            await this.host.saveSettings();
+          } else {
+            text.inputEl.addClass("has-error");
+          }
+        });
+      });
+
+    new Setting(containerEl)
+      .setName(t("settings.inspector.open"))
+      .setDesc(t("settings.inspector.openDesc"))
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.inspector.openButton"))
+          .setIcon("activity")
+          .onClick(() => void this.host.openInspector()),
+      );
   }
 
   // ---- modules ------------------------------------------------------------
 
-  private modulesGroup(): SettingDefinitionItem {
-    const items: SettingGroupItem[] = this.host.listModules().map((module) => ({
-      name: module.name,
-      searchable: false,
-      render: (setting: Setting) => {
-        setting.setName(module.name);
-        const lines = [
-          t("settings.modules.details", {
-            version: module.version,
-            api: module.apiVersion,
-            tools: module.toolNames.length,
-          }),
-          ...module.warnings,
-        ];
-        setting.setDesc(lines.join(" "));
-        if (module.warnings.length > 0) {
-          const badge = setting.nameEl.createSpan({ cls: "aie-badge aie-badge-warning" });
-          setIcon(badge, "alert-triangle");
-          badge.setAttribute("aria-label", t("settings.modules.warnings"));
-        }
-      },
-    }));
-    return {
-      type: "list",
-      heading: t("settings.modules.heading"),
-      emptyState: t("settings.modules.empty"),
-      items,
-    };
+  private renderModulesGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setHeading().setName(t("settings.modules.heading"));
+
+    const modules = this.host.listModules();
+    if (modules.length === 0) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("settings.modules.empty") });
+      return;
+    }
+
+    for (const module of modules) {
+      const setting = new Setting(containerEl);
+      setting.setName(module.name);
+      const lines = [
+        t("settings.modules.details", {
+          version: module.version,
+          api: module.apiVersion,
+          tools: module.toolNames.length,
+        }),
+        ...module.warnings,
+      ];
+      setting.setDesc(lines.join(" "));
+      if (module.warnings.length > 0) {
+        const badge = setting.nameEl.createSpan({ cls: "aie-badge aie-badge-warning" });
+        setIcon(badge, "alert-triangle");
+        badge.setAttribute("aria-label", t("settings.modules.warnings"));
+      }
+    }
   }
 
-  private servicesGroup(): SettingDefinitionItem {
-    const items: SettingGroupItem[] = this.host.listServices().map((service) => ({
-      name: service.name,
-      desc: t("settings.services.owner", { owner: service.ownerModuleId }),
-      searchable: false,
-    }));
-    return {
-      type: "list",
-      heading: t("settings.services.heading"),
-      emptyState: t("settings.services.empty"),
-      items,
-    };
+  private renderServicesGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setHeading().setName(t("settings.services.heading"));
+
+    const services = this.host.listServices();
+    if (services.length === 0) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("settings.services.empty") });
+      return;
+    }
+
+    for (const service of services) {
+      new Setting(containerEl)
+        .setName(service.name)
+        .setDesc(t("settings.services.owner", { owner: service.ownerModuleId }));
+    }
   }
 
-  private catalogGroup(): SettingDefinitionItem {
-    return {
-      type: "group",
-      items: [
-        {
-          name: t("settings.modules.catalog"),
-          desc: t("settings.modules.catalogDesc"),
-          render: (setting) => {
-            setting.addButton((btn) =>
-              btn
-                .setButtonText(t("settings.modules.catalogButton"))
-                .setIcon("package-plus")
-                .onClick(() => void this.host.openCatalog()),
-            );
-          },
-        },
-      ],
-    };
+  private renderCatalogGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName(t("settings.modules.catalog"))
+      .setDesc(t("settings.modules.catalogDesc"))
+      .addButton((btn) =>
+        btn
+          .setButtonText(t("settings.modules.catalogButton"))
+          .setIcon("package-plus")
+          .onClick(() => void this.host.openCatalog()),
+      );
   }
 }

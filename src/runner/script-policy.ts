@@ -142,6 +142,9 @@ function checkShape(options: HubScriptOptions): PolicyResult | undefined {
   if (options.cwd !== undefined && typeof options.cwd !== "string") {
     return refuse("invalid-cwd", "cwd must be a string.");
   }
+  if (options.stdin !== undefined && typeof options.stdin !== "string") {
+    return refuse("invalid-stdin", "stdin must be a string.");
+  }
   return undefined;
 }
 
