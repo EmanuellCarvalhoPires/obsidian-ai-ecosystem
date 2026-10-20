@@ -11,6 +11,8 @@ import {
 
 export const INSPECTOR_VIEW_TYPE = "ai-ecosystem-inspector";
 
+const PAGE_SIZE = 50;
+
 type StatusFilter = "all" | "running" | "problems";
 const STATUS_FILTERS: StatusFilter[] = ["all", "running", "problems"];
 
@@ -41,6 +43,8 @@ export class InspectorView extends ItemView {
   private paused = false;
   private frozen: ActivityEntry[] | undefined;
 
+  private currentPage = 1;
+
   private bannerEl!: HTMLElement;
   private liveDot!: HTMLElement;
   private liveLabel!: HTMLElement;
@@ -51,6 +55,11 @@ export class InspectorView extends ItemView {
   private pauseBtn!: HTMLButtonElement;
   private listEl!: HTMLElement;
   private emptyEl!: HTMLElement;
+
+  private paginationEl!: HTMLElement;
+  private pagePrevBtn!: HTMLButtonElement;
+  private pageNextBtn!: HTMLButtonElement;
+  private pageInfoSpan!: HTMLElement;
 
   private moduleOptionsSignature = "";
   private clientOptionsSignature = "";
@@ -73,6 +82,25 @@ export class InspectorView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    const { workspace } = this.app;
+    // Se aberto na barra lateral (não no rootSplit), migra automaticamente para uma nova aba e fecha a lateral
+    if (this.leaf.getRoot() !== workspace.rootSplit) {
+      setTimeout(async () => {
+        const existingTab = workspace.getLeavesOfType(INSPECTOR_VIEW_TYPE).find((l) => l.getRoot() === workspace.rootSplit);
+        this.leaf.detach();
+        if (existingTab) {
+          await workspace.revealLeaf(existingTab);
+        } else {
+          const tabLeaf = workspace.getLeaf("tab");
+          if (tabLeaf) {
+            await tabLeaf.setViewState({ type: INSPECTOR_VIEW_TYPE, active: true });
+            await workspace.revealLeaf(tabLeaf);
+          }
+        }
+      }, 0);
+      return;
+    }
+
     const root = this.contentEl;
     root.empty();
     root.addClass("aie-act-view");
@@ -85,11 +113,14 @@ export class InspectorView extends ItemView {
     this.emptyEl.createDiv({ text: t("inspector.empty"), cls: "aie-act-empty-title" });
     this.emptyEl.createDiv({ text: t("inspector.emptyFiltered"), cls: "aie-muted aie-act-empty-desc" });
 
+    this.buildPagination(root);
+
     this.unsubscribe = this.deps.logger.subscribe((e) => {
       if (e.type === "cleared") {
         this.frozen = this.paused ? [] : undefined;
         this.rows.clear();
         this.listEl.empty();
+        this.currentPage = 1;
       }
       this.scheduleRender();
     });
@@ -145,6 +176,7 @@ export class InspectorView extends ItemView {
     this.moduleSelect = modGroup.createEl("select", { cls: "dropdown aie-act-select", attr: { "aria-label": t("inspector.module") } });
     this.registerDomEvent(this.moduleSelect, "change", () => {
       this.moduleFilter = this.moduleSelect.value;
+      this.currentPage = 1;
       this.refreshVisibility();
     });
 
@@ -154,6 +186,7 @@ export class InspectorView extends ItemView {
     this.clientSelect = cliGroup.createEl("select", { cls: "dropdown aie-act-select", attr: { "aria-label": t("inspector.client") } });
     this.registerDomEvent(this.clientSelect, "change", () => {
       this.clientFilter = this.clientSelect.value;
+      this.currentPage = 1;
       this.refreshVisibility();
     });
 
@@ -165,6 +198,7 @@ export class InspectorView extends ItemView {
     });
     this.registerDomEvent(this.searchInput, "input", () => {
       this.query = this.searchInput.value;
+      this.currentPage = 1;
       this.refreshVisibility();
     });
 
@@ -198,15 +232,41 @@ export class InspectorView extends ItemView {
     this.registerDomEvent(clearBtn, "click", () => this.deps.logger.clear());
   }
 
+  private buildPagination(root: HTMLElement): void {
+    this.paginationEl = root.createDiv({ cls: "aie-act-pagination" });
+
+    this.pagePrevBtn = this.paginationEl.createEl("button", {
+      cls: "aie-act-page-btn",
+      attr: { "aria-label": t("inspector.pagePrev") },
+    });
+    setIcon(this.pagePrevBtn, "chevron-left");
+    this.registerDomEvent(this.pagePrevBtn, "click", () => {
+      if (this.currentPage > 1) {
+        this.currentPage--;
+        this.refreshVisibility();
+      }
+    });
+
+    this.pageInfoSpan = this.paginationEl.createSpan({ cls: "aie-act-page-info" });
+
+    this.pageNextBtn = this.paginationEl.createEl("button", {
+      cls: "aie-act-page-btn",
+      attr: { "aria-label": t("inspector.pageNext") },
+    });
+    setIcon(this.pageNextBtn, "chevron-right");
+    this.registerDomEvent(this.pageNextBtn, "click", () => {
+      this.currentPage++;
+      this.refreshVisibility();
+    });
+  }
+
   private iconButton(parent: HTMLElement, icon: string, label: string, onClick: () => void): HTMLButtonElement {
     const btn = parent.createEl("button", { cls: "aie-act-btn aie-icon-btn", attr: { "aria-label": label } });
     setIcon(btn.createSpan({ cls: "aie-icon" }), icon);
-    setTooltip(btn, label);
+    btn.setAttr("title", label);
     this.registerDomEvent(btn, "click", onClick);
     return btn;
   }
-
-  // ---------- State & Rendering ----------
 
   private scheduleRender(): void {
     if (this.renderTimer !== undefined) return;
@@ -284,6 +344,7 @@ export class InspectorView extends ItemView {
 
   private setStatusFilter(f: StatusFilter): void {
     this.statusFilter = f;
+    this.currentPage = 1;
     for (const [filterKey, btn] of this.filterButtons) {
       btn.setAttr("aria-pressed", String(filterKey === f));
     }
@@ -473,15 +534,10 @@ export class InspectorView extends ItemView {
 
   private refreshVisibility(): void {
     const all = this.source();
-    let visibleCount = 0;
 
-    for (const [id, row] of this.rows) {
-      const entry = all.find((e) => e.id === id);
-      if (!entry) {
-        row.el.addClass("aie-hidden");
-        continue;
-      }
-
+    // 1. Filter all matching entries
+    const matchingEntries: ActivityEntry[] = [];
+    for (const entry of all) {
       const matchesStatus =
         this.statusFilter === "all"
           ? true
@@ -501,18 +557,56 @@ export class InspectorView extends ItemView {
         matchesSearch = hay.includes(q);
       }
 
-      const visible = matchesStatus && matchesModule && matchesClient && matchesSearch;
-      row.el.toggleClass("aie-hidden", !visible);
-      if (visible) visibleCount++;
+      if (matchesStatus && matchesModule && matchesClient && matchesSearch) {
+        matchingEntries.push(entry);
+      }
     }
 
+    const totalMatching = matchingEntries.length;
+    const totalPages = Math.max(1, Math.ceil(totalMatching / PAGE_SIZE));
+
+    if (this.currentPage > totalPages) {
+      this.currentPage = totalPages;
+    }
+    if (this.currentPage < 1) {
+      this.currentPage = 1;
+    }
+
+    // Newest entries are rendered at the top of the DOM.
+    // In all list (stored in arrival order), the latest entries are at the end.
+    // To show page 1 as newest 50:
+    const reversed = [...matchingEntries].reverse();
+    const startIndex = (this.currentPage - 1) * PAGE_SIZE;
+    const endIndex = startIndex + PAGE_SIZE;
+    const pageEntries = reversed.slice(startIndex, endIndex);
+    const visibleIdSet = new Set<string>(pageEntries.map((e) => e.id));
+
+    // Show only rows that belong to the current page
+    for (const [id, row] of this.rows) {
+      row.el.toggleClass("aie-hidden", !visibleIdSet.has(id));
+    }
+
+    // Empty state
     const hasAny = all.length > 0;
-    this.emptyEl.toggleClass("aie-hidden", visibleCount > 0);
-    if (visibleCount === 0) {
+    this.emptyEl.toggleClass("aie-hidden", totalMatching > 0);
+    if (totalMatching === 0) {
       const titleEl = this.emptyEl.querySelector(".aie-act-empty-title");
       const descEl = this.emptyEl.querySelector(".aie-act-empty-desc");
       if (titleEl) titleEl.textContent = hasAny ? t("inspector.emptyFiltered") : t("inspector.empty");
       if (descEl) descEl.textContent = hasAny ? t("inspector.search") : t("inspector.subtitle");
+    }
+
+    // Update pagination controls
+    if (this.paginationEl) {
+      this.paginationEl.toggleClass("aie-hidden", totalMatching <= PAGE_SIZE);
+      this.pagePrevBtn.disabled = this.currentPage <= 1;
+      this.pageNextBtn.disabled = this.currentPage >= totalPages;
+      const infoText = t("inspector.pageInfo", {
+        page: String(this.currentPage),
+        total: String(totalPages),
+        count: String(totalMatching),
+      });
+      this.pageInfoSpan.setText(infoText);
     }
   }
 }

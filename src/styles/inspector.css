@@ -496,3 +496,41 @@
 .aie-act-copy:focus-visible {
   opacity: 1;
 }
+
+/* Pagination Controls */
+.aie-act-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-4);
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.aie-act-page-info {
+  margin: 0 var(--size-4-2);
+}
+
+.aie-act-page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--size-2-1) var(--size-4-2);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.aie-act-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.aie-act-page-btn:not(:disabled):hover {
+  background: var(--background-modifier-hover);
+}

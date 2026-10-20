@@ -49,6 +49,9 @@ export const inspectorStrings: StringTable = {
     "inspector.noData": "Nothing recorded",
     "inspector.copy": "Copy",
     "inspector.copied": "Copied to clipboard",
+    "inspector.pagePrev": "Previous page",
+    "inspector.pageNext": "Next page",
+    "inspector.pageInfo": "Page {page} of {total} ({count} requests)",
     "inspector.close": "Close",
   },
   pt: {
@@ -98,6 +101,9 @@ export const inspectorStrings: StringTable = {
     "inspector.noData": "Nada registrado",
     "inspector.copy": "Copiar",
     "inspector.copied": "Copiado para a área de transferência",
+    "inspector.pagePrev": "Página anterior",
+    "inspector.pageNext": "Próxima página",
+    "inspector.pageInfo": "Página {page} de {total} ({count} requisições)",
     "inspector.close": "Fechar",
   },
 };
