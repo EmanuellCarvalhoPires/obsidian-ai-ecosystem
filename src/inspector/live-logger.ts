@@ -1,6 +1,6 @@
 // In-memory ring buffer of the requests shown by the Inspector. Pure Node: no "obsidian".
-// History is never written to disk.
 import type { ActivityEntry, ActivityHandle, ActivityInput, ActivitySink } from "../types";
+import type { ActivityDatabase } from "./activity-db";
 import type { Redactor } from "./redaction";
 
 const OUTPUT_CAP = 256 * 1024;
@@ -16,6 +16,7 @@ export interface LiveLoggerOptions {
   redactor: Redactor;
   maxEntries: () => number;
   now?: () => number;
+  database?: ActivityDatabase;
 }
 
 export class LiveLogger implements ActivitySink {
@@ -25,11 +26,28 @@ export class LiveLogger implements ActivitySink {
   private readonly redactor: Redactor;
   private readonly maxEntries: () => number;
   private readonly now: () => number;
+  private readonly database?: ActivityDatabase;
 
   constructor(opts: LiveLoggerOptions) {
     this.redactor = opts.redactor;
     this.maxEntries = opts.maxEntries;
     this.now = opts.now ?? Date.now;
+    this.database = opts.database;
+
+    if (this.database) {
+      try {
+        const history = this.database.getRecent(this.maxEntries());
+        for (const entry of history) {
+          this.list.push(entry);
+          const numId = Number(entry.id);
+          if (Number.isFinite(numId) && numId > this.counter) {
+            this.counter = numId;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load activity history from database", err);
+      }
+    }
   }
 
   log(input: ActivityInput): ActivityEntry {
@@ -100,6 +118,7 @@ export class LiveLogger implements ActivitySink {
 
   clear(): void {
     this.list.length = 0;
+    this.database?.clear();
     this.emit({ type: "cleared" });
   }
 
@@ -132,6 +151,7 @@ export class LiveLogger implements ActivitySink {
 
   private insert(entry: ActivityEntry): void {
     this.list.push(entry);
+    this.database?.save(entry);
     this.emit({ type: "added", entry });
     const max = Math.max(1, Math.floor(this.maxEntries()) || 1);
     while (this.list.length > max) {
@@ -141,7 +161,10 @@ export class LiveLogger implements ActivitySink {
   }
 
   private touch(entry: ActivityEntry): void {
-    if (this.list.includes(entry)) this.emit({ type: "updated", entry });
+    if (this.list.includes(entry)) {
+      this.database?.update(entry);
+      this.emit({ type: "updated", entry });
+    }
   }
 
   private emit(e: LoggerEvent): void {

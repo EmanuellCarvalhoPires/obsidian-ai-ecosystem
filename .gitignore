@@ -5,3 +5,8 @@ styles.css
 .deploy-target
 data.json
 .test-client
+
+.obsidian/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal

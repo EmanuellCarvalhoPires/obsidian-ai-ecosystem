@@ -44,6 +44,17 @@
       },
       "icon": "terminal",
       "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "ai-vault-search",
+      "repo": "EmanuellCarvalhoPires/obsidian-ai-vault-search",
+      "name": "AI Vault Search",
+      "description": {
+        "en": "Continuous indexing and ultra-fast in-memory hybrid search (graph, BM25 and semantic) for AI agents via AI Ecosystem.",
+        "pt": "Indexação contínua e busca híbrida em memória ultrarrápida (grafo, BM25 e semântica) para agentes de IA via AI Ecosystem."
+      },
+      "icon": "search",
+      "minEcosystemVersion": "1.0.0"
     }
   ]
 }

@@ -3,6 +3,7 @@
 // the Obsidian side (views, settings, notices) and the integration tests use this class as is.
 import { EcosystemLifecycle } from "../api/lifecycle";
 import { ProviderApi, createPublicApi } from "../api/provider-api";
+import { ActivityDatabase } from "../inspector/activity-db";
 import { LiveLogger } from "../inspector/live-logger";
 import { createRedactor } from "../inspector/redaction";
 import type { Redactor } from "../inspector/redaction";
@@ -49,6 +50,7 @@ export interface EcosystemDeps {
 export class Ecosystem {
   readonly bus = new ServiceBus();
   readonly redactor: Redactor;
+  readonly database?: ActivityDatabase;
   readonly logger: LiveLogger;
   readonly lifecycle: EcosystemLifecycle;
   readonly registry: ModuleRegistry;
@@ -64,7 +66,19 @@ export class Ecosystem {
   constructor(private readonly deps: EcosystemDeps) {
     const getSecrets = (): SecretVaultService | undefined => this.bus.get<SecretVaultService>(SECRETS_SERVICE);
     this.redactor = createRedactor(getSecrets);
-    this.logger = new LiveLogger({ redactor: this.redactor, maxEntries: () => deps.getSettings().inspector.maxEntries });
+    if (deps.vaultBasePath) {
+      try {
+        const dbPath = `${deps.vaultBasePath}/.obsidian/plugins/ai-ecosystem/activity.sqlite`;
+        this.database = new ActivityDatabase({ filePath: dbPath });
+      } catch (err) {
+        console.warn("[AI Ecosystem] Could not initialize ActivityDatabase, falling back to memory", err);
+      }
+    }
+    this.logger = new LiveLogger({
+      redactor: this.redactor,
+      maxEntries: () => deps.getSettings().inspector.maxEntries,
+      database: this.database,
+    });
     this.lifecycle = new EcosystemLifecycle(deps.trigger);
 
     this.registry = new ModuleRegistry({
@@ -156,6 +170,7 @@ export class Ecosystem {
       this.bus.clear();
       this.providerApi.dispose();
       this.engine.killAll();
+      this.database?.close();
     } catch (err) {
       console.warn("[AI Ecosystem] Error while unloading", err);
     }

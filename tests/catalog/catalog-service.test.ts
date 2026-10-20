@@ -19,6 +19,7 @@ describe("validateCatalog", () => {
       "telegram-ai-gateway",
       "ai-templates",
       "ai-scripts",
+      "ai-vault-search",
     ]);
   });
   it("accepts the owner case-insensitively", () => {
@@ -65,7 +66,7 @@ describe("CatalogService", () => {
     const svc2 = new CatalogService({ embedded: emb, fetchJson: vi.fn().mockResolvedValue({ version: 1, modules: [] }) });
     const r = await svc2.load();
     expect(r.source).toBe("embedded");
-    expect(r.catalog.modules).toHaveLength(4);
+    expect(r.catalog.modules).toHaveLength(5);
   });
   it("caches until the ttl and reloads on force", async () => {
     const fetchJson = vi.fn().mockResolvedValue(remote);
