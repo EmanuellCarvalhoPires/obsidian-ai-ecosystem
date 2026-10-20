@@ -196,23 +196,6 @@ export class InspectorView extends ItemView {
     clearBtn.createSpan({ text: t("inspector.clear") });
     setTooltip(clearBtn, t("inspector.clearTip"));
     this.registerDomEvent(clearBtn, "click", () => this.deps.logger.clear());
-
-    const isTab = this.leaf.getRoot() === this.app.workspace.rootSplit;
-    const toggleLayoutBtn = bar.createEl("button", {
-      cls: "aie-act-btn aie-act-toggle-layout",
-      attr: { "aria-label": isTab ? t("inspector.openSidebar") : t("inspector.openTab") },
-    });
-    setIcon(toggleLayoutBtn.createSpan({ cls: "aie-icon" }), isTab ? "sidebar" : "maximize-2");
-    setTooltip(toggleLayoutBtn, isTab ? t("inspector.openSidebar") : t("inspector.openTab"));
-    this.registerDomEvent(toggleLayoutBtn, "click", () => {
-      const { workspace } = this.app;
-      const currentlyTab = this.leaf.getRoot() === workspace.rootSplit;
-      const targetLeaf = currentlyTab ? workspace.getRightLeaf(false) : workspace.getLeaf("tab");
-      if (!targetLeaf) return;
-      void targetLeaf.setViewState({ type: INSPECTOR_VIEW_TYPE, active: true }).then(() => {
-        void workspace.revealLeaf(targetLeaf);
-      });
-    });
   }
 
   private iconButton(parent: HTMLElement, icon: string, label: string, onClick: () => void): HTMLButtonElement {

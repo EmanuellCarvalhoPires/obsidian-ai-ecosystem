@@ -82,9 +82,9 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     const catalog = new CatalogService({ embedded: catalogData });
     this.registerView(CATALOG_VIEW_TYPE, (leaf) => new CatalogView(leaf, { catalog, installer }));
 
-    this.addRibbonIcon("activity", t("core.ribbon.inspector"), () => void this.openInspector());
+    this.addRibbonIcon("activity", t("core.ribbon.inspector"), () => void this.openInspector("tab"));
     this.addRibbonIcon("package-plus", t("core.ribbon.catalog"), () => void this.openCatalog());
-    this.addCommand({ id: "open-inspector", name: t("core.cmd.openInspector"), callback: () => void this.openInspector("sidebar") });
+    this.addCommand({ id: "open-inspector", name: t("core.cmd.openInspector"), callback: () => void this.openInspector("tab") });
     this.addCommand({ id: "open-inspector-tab", name: t("core.cmd.openInspectorTab"), callback: () => void this.openInspector("tab") });
     this.addCommand({ id: "open-catalog", name: t("core.cmd.openCatalog"), callback: () => void this.openCatalog() });
     this.addCommand({ id: "restart-server", name: t("core.cmd.restartServer"), callback: () => void this.restartServer() });
@@ -169,7 +169,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     this.core.detector.clearCache();
   }
 
-  async openInspector(placement: "sidebar" | "tab" = "sidebar"): Promise<void> {
+  async openInspector(placement: "sidebar" | "tab" = "tab"): Promise<void> {
     await this.openView(INSPECTOR_VIEW_TYPE, placement);
   }
 
