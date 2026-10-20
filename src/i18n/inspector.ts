@@ -5,7 +5,7 @@ export const inspectorStrings: StringTable = {
   en: {
     "inspector.title": "Live activity",
     "inspector.subtitle": "AI client tool calls and requests in real time.",
-    "inspector.memory": "Kept in memory only for this session (never written to disk).",
+    "inspector.memory": "Recorded and persisted to SQLite inside the vault.",
     "inspector.openTab": "Open in tab",
     "inspector.openSidebar": "Sidebar",
     "inspector.live": "Live",
@@ -54,7 +54,7 @@ export const inspectorStrings: StringTable = {
   pt: {
     "inspector.title": "Atividade em tempo real",
     "inspector.subtitle": "Chamadas de ferramentas e requisições dos agentes de IA em tempo real.",
-    "inspector.memory": "Mantido apenas em memória nesta sessão (nunca gravado em disco).",
+    "inspector.memory": "Gravado e persistido em SQLite dentro do cofre.",
     "inspector.openTab": "Abrir em nova aba",
     "inspector.openSidebar": "Barra lateral",
     "inspector.live": "Ao vivo",

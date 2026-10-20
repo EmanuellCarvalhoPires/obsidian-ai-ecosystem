@@ -381,6 +381,7 @@ export interface ActivityEntry {
   output: string;
   alert: boolean;
   running: boolean;
+  tokens?: { input: number; output: number; total: number };
 }
 
 /** Handle of an activity that is still running (scripts). */

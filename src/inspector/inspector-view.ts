@@ -37,7 +37,7 @@ export class InspectorView extends ItemView {
   private moduleFilter = "";
   private clientFilter = "";
   private query = "";
-  private autoOpen = true;
+  private autoOpen = false;
   private paused = false;
   private frozen: ActivityEntry[] | undefined;
 
