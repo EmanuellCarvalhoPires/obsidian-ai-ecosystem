@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ai-ecosystem",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Single local server (REST and MCP) for AI agents such as Claude Code and Antigravity, with a live request inspector, a script runner and one-click setup of companion plugins.",
   "main": "main.js",
   "private": true,
