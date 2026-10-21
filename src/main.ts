@@ -3,16 +3,22 @@ import type { WorkspaceLeaf } from "obsidian";
 import catalogData from "../catalog.json";
 import { CatalogService } from "./catalog/catalog-service";
 import { CATALOG_VIEW_TYPE, CatalogView } from "./catalog/catalog-view";
+import type { CatalogSetupHost } from "./catalog/install-flow";
 import { InstallerService } from "./catalog/installer-service";
 import { collectDeclaredScripts } from "./core/declared-scripts";
 import { Ecosystem } from "./core/ecosystem";
 import { ConflictNotifier, mcpUrl, presentServer, statusBarText } from "./core/notices";
-import { t } from "./i18n";
+import type { HookActionResult, HookInstallPlan, HooksStatus } from "./hooks/hook-manager";
+import type { HookMode } from "./hooks/state-dir";
+import { currentLanguage, t } from "./i18n";
 import { INSPECTOR_VIEW_TYPE, InspectorView } from "./inspector/inspector-view";
+import type { ScreenDefinition } from "./screens/model";
+import { ObsidianScreenHost } from "./screens/ui/obsidian-host";
+import { PreviewModal } from "./screens/ui/preview-modal";
 import { createClient, mergeImportedClients } from "./server/auth";
 import { copyToClipboard } from "./settings/modals";
 import { AIEcosystemSettingTab, type SettingsHost } from "./settings/settings-tab";
-import { normalizeSettings } from "./settings/settings-store";
+import { isValidPort, normalizeSettings } from "./settings/settings-store";
 import {
   ECOSYSTEM_ID,
   type AIEcosystemAPI,
@@ -64,6 +70,13 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
       importClients: (clients, source) => this.importClients(clients, source),
       onStatusChange: (status) => this.onServerStatus(status),
       onRegistryChange: () => this.refreshUiSoon(),
+      configDir: this.app.vault.configDir,
+      isPluginEnabled: (id) => this.isPluginEnabled(id),
+      onHooksChange: () => this.refreshUiSoon(),
+      language: currentLanguage,
+      saveSettings: () => this.saveSettings(),
+      onScriptFoldersAdded: (folders) => new Notice(t("core.notice.scriptFoldersAdded", { folders: folders.join(", ") })),
+      screenHost: new ObsidianScreenHost(this.app),
     });
     this.api = this.core.api;
     const { logger, redactor } = this.core;
@@ -80,7 +93,12 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
       isRegistered: (id) => this.core.registry.has(id),
     });
     const catalog = new CatalogService({ embedded: catalogData });
-    this.registerView(CATALOG_VIEW_TYPE, (leaf) => new CatalogView(leaf, { catalog, installer }));
+    const setup: CatalogSetupHost = {
+      planInstall: async (entry) => this.core.setup?.planCatalogInstall(entry.id),
+      begin: (entry) => this.core.setup?.beginCatalogInstall(entry.id, entry.name),
+      finish: async (entry, ok) => (await this.core.setup?.finishCatalogInstall(entry.id, ok)) ?? { nodeMissing: false },
+    };
+    this.registerView(CATALOG_VIEW_TYPE, (leaf) => new CatalogView(leaf, { catalog, installer, setup }));
 
     this.addRibbonIcon("activity", t("core.ribbon.inspector"), () => void this.openInspector("tab"));
     this.addRibbonIcon("package-plus", t("core.ribbon.catalog"), () => void this.openCatalog());
@@ -150,6 +168,54 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
 
   listServices(): ServiceInfo[] {
     return this.core.bus.list();
+  }
+
+  // ---- Claude Code hooks (settings tab) -------------------------------------
+
+  getHooksStatus(): HooksStatus | undefined {
+    return this.core.hooks?.getStatus();
+  }
+
+  async planHookInstall(moduleId: string): Promise<HookInstallPlan> {
+    if (!this.core.hooks) throw new Error("The hooks are not available");
+    return this.core.hooks.planInstall(moduleId);
+  }
+
+  async installHooks(moduleId: string): Promise<HookActionResult> {
+    return this.core.hooks?.installProtection(moduleId) ?? { ok: false, error: "The hooks are not available" };
+  }
+
+  removeHooks(moduleId: string): HookActionResult {
+    return this.core.hooks?.removeByUser(moduleId) ?? { ok: false, error: "The hooks are not available" };
+  }
+
+  setHookMode(moduleId: string, mode: HookMode): void {
+    this.core.hooks?.setMode(moduleId, mode);
+  }
+
+  useSettingsFile(file: string): HookActionResult {
+    return this.core.hooks?.useSettingsFile(file) ?? { ok: false, error: "The hooks are not available" };
+  }
+
+  // ---- screens (settings tab) -----------------------------------------------
+
+  listScreens(): ScreenDefinition[] | undefined {
+    return this.core.screens?.list();
+  }
+
+  previewScreen(slug: string): void {
+    const screens = this.core.screens;
+    const definition = screens?.get(slug);
+    if (!screens || !definition) return;
+    new PreviewModal(
+      this.app,
+      { mode: "view", definition, json: JSON.stringify(definition, null, 2), secretIssue: (field) => screens.secretIssue(field) },
+      () => undefined,
+    ).open();
+  }
+
+  removeScreen(slug: string): boolean {
+    return this.core.screens?.removeSaved(slug) ?? false;
   }
 
   async createClient(name: string): Promise<{ record: ClientRecord; token: string }> {
@@ -223,8 +289,22 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
   private onServerStatus(status: ServerStatus): void {
     if (this.unloaded) return;
     this.notifier.notify(status);
+    this.rememberPort(status);
     this.updateStatusBar(status);
     this.refreshUiSoon();
+  }
+
+  /** Remembers the port in use, so the next start tries it first and MCP clients keep their URL. */
+  private rememberPort(status: ServerStatus): void {
+    if (!status.running || !isValidPort(status.port) || this.settings.lastPort === status.port) return;
+    this.settings.lastPort = status.port;
+    this.saveSoon();
+  }
+
+  /** Whether a community plugin is still enabled. Unknown counts as enabled. */
+  private isPluginEnabled(id: string): boolean {
+    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
+    return plugins?.enabledPlugins?.has(id) ?? true;
   }
 
   private scanDeclaredScripts(): void {

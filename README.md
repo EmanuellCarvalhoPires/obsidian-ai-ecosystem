@@ -10,10 +10,11 @@ AI Ecosystem is the only plugin of its family that opens a network port. Compani
 
 Read these before you install the plugin.
 
-- **Local server.** The plugin starts an HTTP server that listens on `127.0.0.1` only (never on other network interfaces). Default port: 27150, with an alternative port (27160) used when the main one is taken. Every endpoint except `GET /health` needs a client token, and requests that carry a browser `Origin` header are refused.
+- **Local server.** The plugin starts an HTTP server that listens on `127.0.0.1` only (never on other network interfaces). Default port: 27150. If it is taken, the plugin tries the alternative port (27160) and then the next ports one by one (up to 20 in total), so each vault starts on a free port even with several vaults open; the port actually used is remembered per vault and tried first on the next start, so MCP clients keep working (if it has to change, a notice says so and **Copy MCP URL** gives the new address). Every endpoint except `GET /health` needs a client token, and requests that carry a browser `Origin` header are refused.
 - **Network use.** The plugin makes no background requests. It downloads `catalog.json` and module releases from GitHub (`raw.githubusercontent.com`, `api.github.com` and `github.com`) only when you open the module catalog or click a button there.
 - **Scripts.** AI clients can run scripts (Python, Node.js, Bash, PowerShell) stored in your vault. By default only scripts from folders you allow, or from notes tagged `#mcp/script`, can run. An option in the settings removes this restriction; read the warning before you turn it on.
 - **Installs other plugins.** The module catalog can download, install, enable and update companion plugins. Only repositories of the `EmanuellCarvalhoPires` owner listed in the catalog are accepted, and only when you click. Nothing is installed or updated automatically, and AI clients cannot trigger it.
+- **Writes in your vault's `.claude/` folder.** Hooks, setup skills and a state folder, plus a block in `GEMINI.md`, as described in "Claude Code integration" below. Your own entries are merged, never overwritten.
 - **No telemetry.** Nothing about you or your vault is sent anywhere. The inspector history lives in memory only.
 - Desktop only. The plugin needs Node.js (Electron) APIs.
 
@@ -56,6 +57,30 @@ If you used Environment Keys 1.x, its clients and tokens are imported once when 
 | `ecosystem_run_script` | `POST /scripts/run` | Runs a script and returns exit code, stdout and stderr. |
 
 Tools of the installed modules appear next to these in the same MCP server. `GET /health` is public and returns the app name, version, API version and module ids.
+
+## Claude Code integration: hooks, setup and screens
+
+This part writes inside the `.claude/` folder of your vault (Claude Code reads hooks and skills from there). It needs Node.js on your PATH: the hooks are Node scripts. Without Node.js nothing is written to the settings, and the settings tab says so.
+
+**What the core writes without asking** (declared here instead of a confirmation, because it is the plugin itself):
+
+- the skill `.claude/skills/configurar-ai-ecosystem/SKILL.md`, which guides the first setup;
+- a temporary hook, on `SessionStart` and `UserPromptSubmit`, that tells the agent to run that skill (so a module installed while a session is already open triggers it on the next message), removed when the setup finishes;
+- a `PostToolUseFailure` hook that marks a failed tool of a module, so the protection hooks step aside for a while;
+- the state folder `.claude/ai-ecosystem/` (hook script, heartbeat, module states, rule data, backups);
+- a block between `<!-- ai-ecosystem:start -->` and `<!-- ai-ecosystem:end -->` in `GEMINI.md` for clients without hooks such as Antigravity. The block is only written once you accepted a module install (or when it is already there); the file is created if it does not exist and the rest of it is never changed. `CLAUDE.md` is never written by the plugin: the setup skill asks you first and the agent edits only that block.
+
+The plugin never overwrites your own entries: it merges into `.claude/settings.local.json` (or `settings.json`, your choice), keeps a backup before each write, checks the JSON afterwards, refuses to touch a file with invalid JSON and removes only entries whose command runs `ai-ecosystem-hook.mjs`.
+
+**Modules installed from the catalog** open a confirmation screen before anything is downloaded. It lists what will be written: the setup skill `configurar-<module>`, the temporary setup hook (command and settings file), the protection hooks of the module (written only after its setup) and the `GEMINI.md` block. **Cancel** installs nothing. After you accept, the module stays pending: **its tools are hidden from Claude Code** (Antigravity and other clients see them) until its setup finishes. The next Claude Code session gets an order to run the setup skill, which asks only what the plugin could not detect, with clickable questions, and never asks for a token or password in the chat.
+
+**Protection hooks** keep the agent on the plugin tools: AI Vault Search (Grep and Glob inside the vault), Environment Keys (`curl`, `wget`, `Invoke-RestMethod` and similar against hosts that have a secret with allowed domains), AI Scripts (running scripts of the allowed folders) and AI Templates (`Write` of a new file where a template exists). Telegram AI Gateway has none. Each module has a mode: **block** (default, denies the call and names the right tool), **warn** (lets it through with a reminder) or **off**. The environment variable `AI_ECOSYSTEM_HOOKS=off|avisar|bloquear` overrides the mode for one session. The hooks fail open: any error, a missing or corrupt state file, a plugin that is not running (heartbeat older than 45 seconds) or a tool of that module that failed in the last 10 minutes lets the call through, and the third identical retry passes with a notice. Benchmark with `node scripts/bench-hooks.mjs`: about 50 ms (p50) and 60 ms (p95) per run on Windows.
+
+**Modules that were already active** when you updated (and modules that register without going through the catalog) stay configured and get their protection hooks installed automatically, with no confirmation, in the default mode (block, unless `config.json` says otherwise). Vaults that already have such modules without entries get them on the next load. Without Node.js nothing is written. If you press **Remove hooks** next to a module, the plugin remembers it and does not reinstall them on its own; **Install hooks** brings them back (with the confirmation).
+
+**Setup tools** (always visible): `ecosystem_setup_status`, `ecosystem_setup_save` and `ecosystem_setup_complete`. They report what was detected, store the answers and finish the setup (marker, removal of the temporary hook, protection hooks, tools shown, `GEMINI.md`). The allowed script folders can be added this way only while AI Scripts is being set up (existing folders of the vault only, and you see a notice); afterwards they change only in the settings.
+
+**Screens.** `tela_criar`, `tela_listar`, `tela_editar` and `tela_remover` let an agent define forms that open in Obsidian. A new or changed screen is shown as a preview and saved only after you approve it. Each saved screen becomes its own tool, `tela_<slug>`, with a 5-minute wait (it ends earlier if you send another message or answer). Password and token fields are stored in the Values section of Environment Keys and never returned to the agent, which only sees "filled in". The default limit is 30 screens (a setting).
 
 ## Request inspector
 
@@ -259,10 +284,11 @@ O AI Ecosystem é o único plugin da família que abre uma porta de rede. Os plu
 
 Leia antes de instalar o plugin.
 
-- **Servidor local.** O plugin inicia um servidor HTTP que escuta somente em `127.0.0.1` (nunca em outras interfaces de rede). Porta padrão: 27150, com uma porta alternativa (27160) usada quando a principal está ocupada. Todo endpoint, exceto `GET /health`, exige um token de cliente, e requisições com cabeçalho `Origin` de navegador são recusadas.
+- **Servidor local.** O plugin inicia um servidor HTTP que escuta somente em `127.0.0.1` (nunca em outras interfaces de rede). Porta padrão: 27150. Se ela estiver ocupada, o plugin tenta a porta alternativa (27160) e depois as portas seguintes, uma a uma (até 20 no total), então cada cofre inicia numa porta livre mesmo com vários cofres abertos; a porta realmente usada fica guardada por cofre e é tentada primeiro na próxima vez, para os clientes MCP continuarem funcionando (se ela precisar mudar, um aviso informa e **Copiar URL do MCP** dá o novo endereço). Todo endpoint, exceto `GET /health`, exige um token de cliente, e requisições com cabeçalho `Origin` de navegador são recusadas.
 - **Uso de rede.** O plugin não faz requisições em segundo plano. Ele baixa o `catalog.json` e as releases dos módulos do GitHub (`raw.githubusercontent.com`, `api.github.com` e `github.com`) somente quando você abre o catálogo de módulos ou clica em um botão dele.
 - **Scripts.** Clientes de IA podem executar scripts (Python, Node.js, Bash, PowerShell) guardados no seu cofre. Por padrão, só rodam scripts de pastas que você permitiu ou de notas com a tag `#mcp/script`. Uma opção nas configurações remove essa restrição; leia o aviso antes de ativá-la.
 - **Instala outros plugins.** O catálogo de módulos pode baixar, instalar, ativar e atualizar plugins complementares. Só são aceitos repositórios do dono `EmanuellCarvalhoPires` listados no catálogo, e somente quando você clica. Nada é instalado ou atualizado automaticamente, e clientes de IA não conseguem disparar isso.
+- **Grava na pasta `.claude/` do seu cofre.** Hooks, skills de configuração e uma pasta de estado, além de um bloco no `GEMINI.md`, como descrito em "Integração com o Claude Code" abaixo. Suas entradas são mescladas, nunca sobrescritas.
 - **Sem telemetria.** Nada sobre você ou seu cofre é enviado a lugar nenhum. O histórico do inspetor fica só na memória.
 - Somente desktop. O plugin precisa das APIs do Node.js (Electron).
 
@@ -305,6 +331,30 @@ Se você usava o Environment Keys 1.x, os clientes e tokens dele são importados
 | `ecosystem_run_script` | `POST /scripts/run` | Executa um script e devolve código de saída, stdout e stderr. |
 
 As tools dos módulos instalados aparecem junto com essas, no mesmo servidor MCP. `GET /health` é público e devolve o nome do app, a versão, a versão da API e os ids dos módulos.
+
+## Integração com o Claude Code: hooks, configuração e telas
+
+Esta parte grava dentro da pasta `.claude/` do seu cofre (o Claude Code lê hooks e skills de lá). Ela precisa do Node.js no PATH: os hooks são scripts Node. Sem o Node.js nada é gravado nas configurações, e a aba de configurações avisa.
+
+**O que o núcleo grava sem perguntar** (declarado aqui no lugar de uma confirmação, porque é o próprio plugin):
+
+- a skill `.claude/skills/configurar-ai-ecosystem/SKILL.md`, que guia a primeira configuração;
+- um hook temporário, em `SessionStart` e `UserPromptSubmit`, que manda o agente rodar essa skill (assim um módulo instalado com a sessão já aberta dispara a skill na mensagem seguinte), removido quando a configuração termina;
+- um hook de `PostToolUseFailure` que marca a falha de uma tool de um módulo, para os hooks de proteção ficarem de lado por um tempo;
+- a pasta de estado `.claude/ai-ecosystem/` (script dos hooks, heartbeat, estados dos módulos, dados das regras, cópias de segurança);
+- um bloco entre `<!-- ai-ecosystem:start -->` e `<!-- ai-ecosystem:end -->` no `GEMINI.md`, para clientes sem hooks como o Antigravity. O bloco só é gravado depois que você aceitou a instalação de um módulo (ou quando já existe); o arquivo é criado se não existir e o resto dele nunca é alterado. O `CLAUDE.md` nunca é gravado pelo plugin: a skill de configuração pergunta antes e o agente edita só esse bloco.
+
+O plugin nunca sobrescreve as suas entradas: ele mescla em `.claude/settings.local.json` (ou `settings.json`, à sua escolha), guarda uma cópia antes de cada gravação, confere o JSON depois, se recusa a mexer em arquivo com JSON inválido e remove só as entradas cujo comando roda `ai-ecosystem-hook.mjs`.
+
+**Módulos instalados pelo catálogo** abrem uma tela de confirmação antes de baixar qualquer coisa. Ela lista o que será gravado: a skill de configuração `configurar-<módulo>`, o hook temporário (comando e arquivo de configurações), os hooks de proteção do módulo (gravados só depois da configuração) e o bloco do `GEMINI.md`. **Cancelar** não instala nada. Depois do aceite o módulo fica pendente: **as tools dele ficam escondidas do Claude Code** (o Antigravity e outros clientes as veem) até a configuração terminar. A próxima sessão do Claude Code recebe a ordem de rodar a skill, que pergunta só o que o plugin não detectou, com perguntas clicáveis, e nunca pede token ou senha no chat.
+
+**Hooks de proteção** mantêm o agente nas tools dos plugins: AI Vault Search (Grep e Glob dentro do cofre), Environment Keys (`curl`, `wget`, `Invoke-RestMethod` e parecidos contra hosts que têm secret com domínios permitidos), AI Scripts (rodar scripts das pastas permitidas) e AI Templates (`Write` de arquivo novo onde existe molde). O Telegram AI Gateway não tem nenhum. Cada módulo tem um modo: **bloquear** (padrão, nega a chamada e indica a tool certa), **avisar** (deixa passar com um lembrete) ou **desligado**. A variável de ambiente `AI_ECOSYSTEM_HOOKS=off|avisar|bloquear` sobrepõe o modo em uma sessão. Os hooks falham liberando: qualquer erro, arquivo de estado ausente ou corrompido, plugin fora do ar (heartbeat com mais de 45 segundos) ou tool do módulo que falhou nos últimos 10 minutos deixa a chamada passar, e a terceira tentativa idêntica passa com um aviso. Medição com `node scripts/bench-hooks.mjs`: cerca de 50 ms (p50) e 60 ms (p95) por execução no Windows.
+
+**Módulos que já estavam ativos** quando você atualizou (e módulos que se registram sem passar pelo catálogo) continuam configurados e recebem os hooks de proteção automaticamente, sem confirmação, no modo padrão (bloquear, salvo se o `config.json` disser outro). Cofres que já têm esses módulos sem entradas passam a tê-las no próximo carregamento. Sem o Node.js nada é gravado. Se você apertar **Remover hooks** ao lado de um módulo, o plugin lembra disso e não reinstala sozinho; **Instalar hooks** os traz de volta (com a confirmação).
+
+**Tools de configuração** (sempre visíveis): `ecosystem_setup_status`, `ecosystem_setup_save` e `ecosystem_setup_complete`. Elas informam o que foi detectado, guardam as respostas e concluem a configuração (marcador, remoção do hook temporário, hooks de proteção, tools liberadas, `GEMINI.md`). As pastas permitidas de scripts só podem ser acrescentadas por aqui enquanto o AI Scripts está sendo configurado (só pastas que já existem no cofre, e você vê um aviso); depois, mudam só nas configurações.
+
+**Telas.** `tela_criar`, `tela_listar`, `tela_editar` e `tela_remover` deixam um agente definir formulários que abrem no Obsidian. Uma tela nova ou alterada aparece como prévia e só é salva depois da sua aprovação. Cada tela salva vira uma tool própria, `tela_<slug>`, com espera de 5 minutos (termina antes se você mandar outra mensagem ou responder). Campos de senha e token são guardados na seção de Valores do Environment Keys e nunca voltam ao agente, que só vê "preenchido". O limite padrão é de 30 telas (configurável).
 
 ## Inspetor de requisições
 

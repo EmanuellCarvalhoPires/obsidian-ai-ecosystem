@@ -296,6 +296,27 @@ describe("ScriptEngine: secrets", () => {
     expect(JSON.stringify(rec.ends)).not.toContain("TOPSECRET");
   });
 
+  it("resolves placeholders in args through spawnWithSecretsAndArgs when Environment Keys has it", async () => {
+    const fake = fakeSecrets();
+    secrets = {
+      ...fake,
+      spawnWithSecretsAndArgs: async ({ env, args }, spawnFn) => {
+        const swap = (v: string) => v.replace(/\{\{secret:[A-Z_]+\}\}/g, "TOPSECRET");
+        const resolvedEnv: Record<string, string> = {};
+        for (const [k, v] of Object.entries(env)) resolvedEnv[k] = swap(v);
+        await spawnFn({ env: resolvedEnv, args: args.map(swap) });
+      },
+    };
+    writeFile(vault, "Scripts/a.js", `console.log(process.argv[2] === "TOPSECRET" ? "arg ok" : "arg missing")`);
+    const result = await engine().run(
+      { language: "node", scriptPath: "Scripts/a.js", args: ["{{secret:API_KEY}}"] },
+      caller,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("arg ok");
+    expect(JSON.stringify(rec.begins)).not.toContain("TOPSECRET");
+  });
+
   it("refuses with secrets-unavailable and secrets-locked", async () => {
     writeFile(vault, "Scripts/s.js", `console.log(1)`);
     const run = () =>

@@ -2,7 +2,17 @@ import { randomUUID } from "node:crypto";
 import type * as http from "node:http";
 import { clearInterval, setInterval } from "node:timers";
 import { ECOSYSTEM_ID } from "../types";
-import type { ActivityInput, ActivitySink, ClientContext, HubCallContext, HubToolResult, RegistryLookup } from "../types";
+import type {
+  ActivityInput,
+  ActivitySink,
+  ClientContext,
+  ClientKind,
+  HubCallContext,
+  HubToolResult,
+  RegisteredTool,
+  RegistryLookup,
+} from "../types";
+import { detectClientKind } from "./client-detector";
 import { sendJson } from "./http-utils";
 
 export const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const;
@@ -38,6 +48,23 @@ export interface McpHostOptions {
   serverInfo: { name: string; title: string; version: string };
   /** Base text of the MCP instructions; the modules' instructions are appended on initialize. */
   getBaseInstructions: () => string;
+  /** True to hide a tool from tools/list (and refuse tools/call) for that kind of client. */
+  isToolHidden?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
+  /** Called after every tools/call. Errors thrown here never affect the request. */
+  onToolResult?: (moduleId: string, isError: boolean) => void;
+}
+
+/** What one POST carries between the steps of its processing. */
+interface RequestState {
+  /** Session of the Mcp-Session-Id header. */
+  sessionId?: string;
+  newSessionId?: string;
+  /** Controllers of the tool calls of this POST, aborted if the connection closes early. */
+  aborts: Set<AbortController>;
+}
+
+interface Session {
+  clientInfoName?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -50,7 +77,9 @@ function rpcError(id: JsonRpcId, code: number, message: string): RpcResponse {
 
 /** MCP over Streamable HTTP at /mcp: JSON responses plus an optional GET stream for list_changed. */
 export class McpHost {
-  private readonly sessions = new Set<string>();
+  private readonly sessions = new Map<string, Session>();
+  /** Tool calls still running, by session and JSON-RPC id, so notifications/cancelled can abort them. */
+  private readonly inFlight = new Map<string, AbortController>();
   private readonly streams = new Map<http.ServerResponse, string | undefined>();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
 
@@ -60,7 +89,7 @@ export class McpHost {
     const sessionId = headerValue(req.headers["mcp-session-id"]);
     switch (req.method) {
       case "POST":
-        return this.handlePost(res, client, rawBody);
+        return this.handlePost(res, client, rawBody, sessionId);
       case "GET": {
         if (String(req.headers.accept ?? "").includes("text/event-stream")) {
           this.openStream(req, res, sessionId);
@@ -110,6 +139,8 @@ export class McpHost {
     }
     this.streams.clear();
     this.sessions.clear();
+    for (const controller of this.inFlight.values()) controller.abort();
+    this.inFlight.clear();
     this.stopHeartbeat();
   }
 
@@ -117,7 +148,7 @@ export class McpHost {
   // POST
   // -------------------------------------------------------------------------
 
-  private async handlePost(res: http.ServerResponse, client: ClientContext, rawBody: string): Promise<void> {
+  private async handlePost(res: http.ServerResponse, client: ClientContext, rawBody: string, sessionId: string | undefined): Promise<void> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawBody);
@@ -125,7 +156,12 @@ export class McpHost {
       return sendJson(res, 400, rpcError(null, -32700, "Parse error"));
     }
 
-    const state: { newSessionId?: string } = {};
+    const state: RequestState = { sessionId, aborts: new Set() };
+    // The client gave up (closed the connection) before the answer: stop the tools still running.
+    res.once("close", () => {
+      if (res.writableFinished) return;
+      for (const controller of state.aborts) controller.abort();
+    });
     const respond = (status: number, body: unknown) => {
       const headers: Record<string, string> = state.newSessionId ? { [MCP_SESSION_HEADER]: state.newSessionId } : {};
       sendJson(res, status, body, headers);
@@ -154,7 +190,7 @@ export class McpHost {
   }
 
   /** Handles one JSON-RPC message. Returns undefined for notifications and responses. */
-  private async processEntry(entry: unknown, client: ClientContext, state: { newSessionId?: string }): Promise<RpcResponse | undefined> {
+  private async processEntry(entry: unknown, client: ClientContext, state: RequestState): Promise<RpcResponse | undefined> {
     if (!isObject(entry)) return rpcError(null, -32600, "Invalid Request");
 
     const hasMethod = typeof entry.method === "string";
@@ -166,7 +202,10 @@ export class McpHost {
     if (entry.jsonrpc !== "2.0") {
       return rpcError(validId(entry.id) ? (entry.id as JsonRpcId) : null, -32600, "Invalid Request");
     }
-    if (!("id" in entry) || entry.id === undefined) return undefined; // notification
+    if (!("id" in entry) || entry.id === undefined) {
+      if (entry.method === "notifications/cancelled") this.cancel(entry.params, state);
+      return undefined; // notification
+    }
     if (!validId(entry.id)) return rpcError(null, -32600, "Invalid Request");
 
     const id = entry.id as JsonRpcId;
@@ -176,7 +215,7 @@ export class McpHost {
     const started = Date.now();
     let outcome: Outcome;
     try {
-      outcome = await this.execute(method, params, client, state);
+      outcome = await this.execute(method, params, client, state, id);
     } catch (err) {
       const e = err instanceof RpcError ? err : new RpcError(-32603, err instanceof Error ? err.message : "Internal error");
       outcome = { error: e, log: { method: "MCP", target: method, moduleId: ECOSYSTEM_ID, status: e.code === -32603 ? 500 : 400, response: { error: e.message } } };
@@ -205,7 +244,7 @@ export class McpHost {
     }
   }
 
-  private async execute(method: string, params: Record<string, unknown>, client: ClientContext, state: { newSessionId?: string }): Promise<Outcome> {
+  private async execute(method: string, params: Record<string, unknown>, client: ClientContext, state: RequestState, id: JsonRpcId): Promise<Outcome> {
     const plain = (result: unknown, response: unknown = result, payload?: unknown): Outcome => ({
       result,
       log: { method: "MCP", target: method, moduleId: ECOSYSTEM_ID, status: 200, payload, response },
@@ -216,7 +255,9 @@ export class McpHost {
         const asked = params.protocolVersion;
         const supported = typeof asked === "string" && (MCP_PROTOCOL_VERSIONS as readonly string[]).includes(asked);
         const protocolVersion = supported ? asked : MCP_PROTOCOL_VERSIONS[0];
-        state.newSessionId = this.createSession();
+        const clientInfo = params.clientInfo;
+        const clientName = isObject(clientInfo) && typeof clientInfo.name === "string" ? clientInfo.name : undefined;
+        state.newSessionId = this.createSession(clientName);
         return plain(
           {
             protocolVersion,
@@ -232,7 +273,9 @@ export class McpHost {
       case "logging/setLevel":
         return plain({});
       case "tools/list": {
-        const tools = this.opts.registry.listTools().map(({ tool }) => {
+        const kind = this.clientKind(client, state);
+        const visible = this.opts.registry.listTools().filter((registered) => !this.isHidden(registered, kind));
+        const tools = visible.map(({ tool }) => {
           const out: Record<string, unknown> = { name: tool.name };
           if (tool.title !== undefined) out.title = tool.title;
           out.description = tool.description;
@@ -244,7 +287,7 @@ export class McpHost {
         return plain({ tools }, { tools: tools.length });
       }
       case "tools/call":
-        return this.callTool(params, client);
+        return this.callTool(params, client, state, id);
       case "prompts/list": {
         const prompts = this.opts.registry.listPrompts().map(({ prompt }) => {
           const out: Record<string, unknown> = { name: prompt.name };
@@ -256,7 +299,7 @@ export class McpHost {
         return plain({ prompts }, { prompts: prompts.length });
       }
       case "prompts/get":
-        return this.getPrompt(params, client);
+        return this.getPrompt(params, client, state);
       case "resources/list":
         return plain({ resources: [] });
       case "resources/templates/list":
@@ -269,7 +312,7 @@ export class McpHost {
     }
   }
 
-  private async callTool(params: Record<string, unknown>, client: ClientContext): Promise<Outcome> {
+  private async callTool(params: Record<string, unknown>, client: ClientContext, state: RequestState, id: JsonRpcId): Promise<Outcome> {
     const name = params.name;
     if (typeof name !== "string" || name === "") throw new RpcError(-32602, "Invalid params: name is required");
     const rawArgs = params.arguments ?? {};
@@ -280,13 +323,34 @@ export class McpHost {
       throw new RpcError(-32602, `Unknown tool: ${name}`);
     }
 
-    const ctx: HubCallContext = { client, moduleId: found.moduleId };
+    const kind = this.clientKind(client, state);
+    if (this.isHidden(found, kind)) {
+      const text =
+        `The module "${found.moduleId}" has not been set up yet, so its tools are not available. ` +
+        `Run the skill configurar-${found.moduleId} first.`;
+      const refused: HubToolResult = { content: [{ type: "text", text }], isError: true };
+      return { result: refused, log: { method: "MCP Tool Call", target: name, moduleId: found.moduleId, status: 403, payload: rawArgs, response: refused } };
+    }
+
+    const controller = new AbortController();
+    const key = this.callKey(state.sessionId, id);
+    this.inFlight.set(key, controller);
+    state.aborts.add(controller);
+    const ctx: HubCallContext = { client, moduleId: found.moduleId, clientKind: kind, signal: controller.signal };
     let result: HubToolResult;
     try {
       result = await found.tool.handler(rawArgs, ctx);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result = { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+    } finally {
+      if (this.inFlight.get(key) === controller) this.inFlight.delete(key);
+      state.aborts.delete(controller);
+    }
+    try {
+      this.opts.onToolResult?.(found.moduleId, result.isError === true);
+    } catch {
+      // The failure marker must never break a request.
     }
     return {
       result,
@@ -301,7 +365,7 @@ export class McpHost {
     };
   }
 
-  private async getPrompt(params: Record<string, unknown>, client: ClientContext): Promise<Outcome> {
+  private async getPrompt(params: Record<string, unknown>, client: ClientContext, state: RequestState): Promise<Outcome> {
     const name = params.name;
     if (typeof name !== "string" || name === "") throw new RpcError(-32602, "Invalid params: name is required");
     const found = this.opts.registry.findPrompt(name);
@@ -319,7 +383,7 @@ export class McpHost {
 
     const log = { method: "MCP Prompt", target: name, moduleId: found.moduleId, payload: args };
     try {
-      const result = await found.prompt.handler(args, { client, moduleId: found.moduleId });
+      const result = await found.prompt.handler(args, { client, moduleId: found.moduleId, clientKind: this.clientKind(client, state) });
       return { result, log: { ...log, status: 200, response: result } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -336,14 +400,40 @@ export class McpHost {
   // Sessions and streams
   // -------------------------------------------------------------------------
 
-  private createSession(): string {
+  private createSession(clientInfoName: string | undefined): string {
     const id = randomUUID();
-    this.sessions.add(id);
+    this.sessions.set(id, { clientInfoName });
     if (this.sessions.size > MAX_SESSIONS) {
-      const oldest = this.sessions.values().next().value;
+      const oldest = this.sessions.keys().next().value;
       if (oldest !== undefined) this.sessions.delete(oldest);
     }
     return id;
+  }
+
+  /** The client's own name (clientInfo of its session) wins; the token name is the fallback. */
+  private clientKind(client: ClientContext, state: RequestState): ClientKind {
+    const session = state.sessionId ? this.sessions.get(state.sessionId) : undefined;
+    return detectClientKind(session?.clientInfoName, client.name);
+  }
+
+  private isHidden(registered: RegisteredTool, kind: ClientKind): boolean {
+    try {
+      return this.opts.isToolHidden?.(registered, kind) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  private callKey(sessionId: string | undefined, id: JsonRpcId): string {
+    return `${sessionId ?? "-"}|${typeof id}:${String(id)}`;
+  }
+
+  /** notifications/cancelled: aborts the call of that request id, if it is still running. */
+  private cancel(params: unknown, state: RequestState): void {
+    if (!isObject(params)) return;
+    const requestId = params.requestId;
+    if (typeof requestId !== "string" && typeof requestId !== "number") return;
+    this.inFlight.get(this.callKey(state.sessionId, requestId))?.abort();
   }
 
   private dropSession(sessionId: string): void {

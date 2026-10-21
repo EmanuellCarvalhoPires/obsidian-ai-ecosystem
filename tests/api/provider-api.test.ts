@@ -178,6 +178,7 @@ describe("createPublicApi", () => {
     expect(Object.keys(pub).sort()).toEqual(
       [
         "apiVersion",
+        "beginActivity",
         "getServerStatus",
         "getService",
         "importClients",

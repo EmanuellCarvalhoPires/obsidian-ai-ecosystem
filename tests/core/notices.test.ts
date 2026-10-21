@@ -29,8 +29,8 @@ describe("conflictMessage", () => {
 
   it("names the process of another program when known", () => {
     const message = conflictMessage(onAlternative({ port: 27150, owner: "other", processName: "node.exe" }));
-    expect(message).toContain("Port 27150 is used by node.exe.");
-    expect(message).toContain("alternative port 27160");
+    expect(message).toContain("Port 27150 is busy: it is used by node.exe.");
+    expect(message).toContain("using port 27160 instead");
     expect(message).toContain("change the port in the settings");
   });
 
@@ -44,9 +44,43 @@ describe("conflictMessage", () => {
   });
 
   it("reports a failed start", () => {
-    const status: ServerStatus = { running: false, port: 27150, usingAlternativePort: false, error: "Port 27150 is in use and the alternative port 27160 is not available (x)." };
+    const status: ServerStatus = { running: false, port: 27150, usingAlternativePort: false, error: "Port 27150 is in use and no free port was found in 27160-27179. Free a port or change the port in the settings." };
     expect(conflictMessage(status)).toContain("could not start its server");
-    expect(conflictMessage(status)).toContain("alternative port 27160 is not available");
+    expect(conflictMessage(status)).toContain("27160-27179");
+  });
+
+  it("says which port is in use and that the configured one was busy", () => {
+    const status = onAlternative({ port: 27150, owner: "other" });
+    status.configuredPort = 27150;
+    const message = conflictMessage(status) ?? "";
+    expect(message).toContain("Port 27150 is busy");
+    expect(message).toContain("port 27160 instead");
+    setLanguage("pt");
+    expect(conflictMessage(status)).toContain("A porta 27150 está ocupada");
+    expect(conflictMessage(status)).toContain("porta 27160");
+  });
+
+  it("tells MCP clients to use the new URL when the port changed since last time", () => {
+    const status = { ...onAlternative({ port: 27150, owner: "other", processName: "node.exe" }), configuredPort: 27150, previousPort: 27161 };
+    const message = conflictMessage(status) ?? "";
+    expect(message).toContain("was on port 27161 before and is now on port 27160");
+    expect(message).toContain("Copy MCP URL");
+    setLanguage("pt");
+    expect(conflictMessage(status)).toContain("estava na porta 27161 e agora está na porta 27160");
+    expect(conflictMessage(status)).toContain("Copiar URL do MCP");
+  });
+
+  it("explains a vault that keeps its last port, and a vault that is back on the main port", () => {
+    const kept: ServerStatus = { running: true, port: 27161, usingAlternativePort: true, configuredPort: 27150 };
+    expect(conflictMessage(kept)).toContain("the one this vault used last time");
+    expect(conflictMessage(kept)).toContain("configured port 27150");
+    expect(presentServer(kept)).toMatchObject({ state: "alternative" });
+    expect(statusBarText(kept)).toBe("AI Ecosystem: 127.0.0.1:27161 (last port)");
+
+    const back: ServerStatus = { running: true, port: 27150, usingAlternativePort: false, previousPort: 27161 };
+    expect(conflictMessage(back)).toContain("was on port 27161 before and is now on port 27150");
+    expect(presentServer(back)).toMatchObject({ state: "running" });
+    expect(presentServer(back).detail).toContain("27161");
   });
 });
 
@@ -58,7 +92,8 @@ describe("presentServer and statusBarText", () => {
     const alt = onAlternative({ port: 27150, owner: "environment-keys-1" });
     expect(presentServer(alt)).toMatchObject({ state: "alternative", icon: "alert-triangle" });
     expect(presentServer(alt).detail).toContain("Environment Keys 1.x");
-    expect(statusBarText(alt)).toBe("AI Ecosystem: 127.0.0.1:27160 (alternative)");
+    expect(statusBarText(alt)).toBe("AI Ecosystem: 127.0.0.1:27160 (main port busy)");
+    expect(presentServer(alt).title).toBe("Running on 127.0.0.1:27160 (the configured port is busy)");
 
     const waiting: ServerStatus = { running: false, port: 27150, usingAlternativePort: false, conflict: { port: 27150, owner: "environment-keys-transition" } };
     expect(presentServer(waiting)).toMatchObject({ state: "waiting", icon: "loader" });

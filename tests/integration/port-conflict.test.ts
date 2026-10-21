@@ -48,6 +48,7 @@ describe("port conflicts", () => {
     expect(status).toMatchObject({ running: true, usingAlternativePort: true });
     expect(status.port).not.toBe(dummy.port);
     expect(status.conflict).toMatchObject({ port: dummy.port, owner: "environment-keys-1", ownerVersion: "1.11.0" });
+    expect(status).toMatchObject({ configuredPort: dummy.port });
     expect(conflictMessage(status)).toBe(
       `Port ${dummy.port} is used by Environment Keys 1.x. Update Environment Keys to 2.0. AI Ecosystem is using port ${status.port} for now.`,
     );

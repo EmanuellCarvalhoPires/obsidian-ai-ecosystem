@@ -1,11 +1,32 @@
 import { Setting } from "obsidian";
 import { describe, expect, it, vi } from "vitest";
+import type { HooksStatus } from "../../src/hooks/hook-manager";
 import { AIEcosystemSettingTab } from "../../src/settings/settings-tab";
 import type { SettingsHost } from "../../src/settings/settings-tab";
 import { buildClaudeCommand, buildJsonConfig } from "../../src/settings/modals";
 import { normalizeSettings, readSetting } from "../../src/settings/settings-store";
 
 const EMOJI = /\p{Extended_Pictographic}/u;
+
+const hooksStatus: HooksStatus = {
+  node: { available: true, version: "v22.5.0", checked: true },
+  settingsFile: "settings.local.json",
+  settingsPath: "C:/Cofre/.claude/settings.local.json",
+  coreInstalled: true,
+  modules: [
+    {
+      id: "ai-scripts",
+      name: "AI Scripts",
+      registered: true,
+      estado: "configurado",
+      origem: "legado",
+      mode: "bloquear",
+      hasProtection: true,
+      installed: [],
+      setupHook: false,
+    },
+  ],
+};
 
 function makeHost(): SettingsHost {
   const settings = normalizeSettings({
@@ -28,6 +49,15 @@ function makeHost(): SettingsHost {
     onInterpretersChanged: () => undefined,
     openInspector: async () => undefined,
     openCatalog: async () => undefined,
+    getHooksStatus: () => hooksStatus,
+    planHookInstall: async () => ({ settingsPath: hooksStatus.settingsPath, entries: [], node: { available: true } }),
+    installHooks: async () => ({ ok: true, changed: true }),
+    removeHooks: () => ({ ok: true, changed: true }),
+    setHookMode: () => undefined,
+    useSettingsFile: () => ({ ok: true, changed: false }),
+    listScreens: () => [{ slug: "cadastro_cliente", titulo: "Customer form", campos: [{ id: "nome", tipo: "texto", rotulo: "Name" }] }],
+    previewScreen: () => undefined,
+    removeScreen: () => true,
   };
 }
 
@@ -97,7 +127,7 @@ describe("settings tab (imperative display)", () => {
 
   it("renders the sections in order", () => {
     const headings = rendered.filter((r) => r.heading).map((r) => r.name);
-    expect(headings).toEqual(["Server", "Clients", "Scripts", "Allowed script folders", "Danger zone", "Inspector", "Modules", "Services"]);
+    expect(headings).toEqual(["Server", "Clients", "Scripts", "Allowed script folders", "Danger zone", "Inspector", "Modules", "Claude Code hooks", "Screens", "Services"]);
   });
 
   it("only binds control keys the store can read", () => {
@@ -110,6 +140,7 @@ describe("settings tab (imperative display)", () => {
       "scripts.interpreter.bash",
       "scripts.interpreter.powershell",
       "inspector.maxEntries",
+      "screens.maxScreens",
     ];
     for (const key of keys) expect(readSetting(host.settings, key), key).not.toBeUndefined();
     for (const key of keys) expect(tab.getControlValue(key)).toEqual(readSetting(host.settings, key));
@@ -119,6 +150,17 @@ describe("settings tab (imperative display)", () => {
     const names = rendered.map((r) => r.name);
     expect(names).toContain("Claude Code");
     expect(names).toContain("Scripts");
+  });
+
+  it("lists the saved screens with their tool name", () => {
+    const row = rendered.find((r) => r.name === "Customer form");
+    expect(row?.desc).toBe("tela_cadastro_cliente - 1 fields");
+    expect(rendered.map((r) => r.name)).toContain("Maximum screens");
+  });
+
+  it("lists one row per module in the hooks section", () => {
+    const row = rendered.find((r) => r.name === "AI Scripts");
+    expect(row?.desc).toBe("Existing module, hooks removed or unavailable. Hooks not installed");
   });
 
   it("contains no emoji", () => {

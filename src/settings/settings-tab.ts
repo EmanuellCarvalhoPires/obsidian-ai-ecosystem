@@ -1,16 +1,22 @@
 // Settings tab (imperative, Obsidian-standard): server, clients, scripts, inspector, modules.
-import { PluginSettingTab, Setting, setIcon } from "obsidian";
+import { Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import type { App, Plugin } from "obsidian";
 import { mcpUrl, presentServer } from "../core/notices";
 import { t } from "../i18n";
+import { screenToolName } from "../screens/model";
+import type { ScreenDefinition } from "../screens/model";
 import type { AIEcosystemSettings, ClientRecord, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
+import { renderHooksGroup } from "./hooks-section";
+import type { HooksSettingsHost } from "./hooks-section";
 import { ConfirmModal, NewClientModal, PromptModal } from "./modals";
 import {
   MAX_ENTRIES,
   MAX_PORT,
+  MAX_SCREENS,
   MAX_TIMEOUT_SECONDS,
   MIN_ENTRIES,
   MIN_PORT,
+  MIN_SCREENS,
   MIN_TIMEOUT_SECONDS,
   isValidPort,
   normalizeFolder,
@@ -19,7 +25,7 @@ import {
 } from "./settings-store";
 
 /** What the settings tab needs from the plugin. */
-export interface SettingsHost {
+export interface SettingsHost extends HooksSettingsHost {
   settings: AIEcosystemSettings;
   saveSettings(): Promise<void>;
   getServerStatus(): ServerStatus;
@@ -35,6 +41,12 @@ export interface SettingsHost {
   onInterpretersChanged(): void;
   openInspector(): Promise<void>;
   openCatalog(): Promise<void>;
+  /** The saved screens, or undefined when screens are not available in this vault. */
+  listScreens(): ScreenDefinition[] | undefined;
+  /** Opens the preview window of a saved screen (nothing is sent from it). */
+  previewScreen(slug: string): void;
+  /** Removes a saved screen. Returns false when it no longer exists. */
+  removeScreen(slug: string): boolean;
 }
 
 const INTERPRETERS = [
@@ -89,6 +101,8 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     this.renderDangerGroup(containerEl);
     this.renderInspectorGroup(containerEl);
     this.renderModulesGroup(containerEl);
+    renderHooksGroup(containerEl, this.app, this.host, () => this.display());
+    this.renderScreensGroup(containerEl);
     this.renderServicesGroup(containerEl);
     this.renderCatalogGroup(containerEl);
   }
@@ -123,6 +137,7 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
           if (!err && num !== settings.port) {
             text.inputEl.removeClass("has-error");
             settings.port = num;
+            delete settings.lastPort;
             await this.host.saveSettings();
             this.host.scheduleServerRestart();
           } else if (err) {
@@ -146,6 +161,7 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
           if (!err && num !== settings.alternativePort) {
             text.inputEl.removeClass("has-error");
             settings.alternativePort = num;
+            delete settings.lastPort;
             await this.host.saveSettings();
             this.host.scheduleServerRestart();
           } else if (err) {
@@ -473,6 +489,76 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
         badge.setAttribute("aria-label", t("settings.modules.warnings"));
       }
     }
+  }
+
+  // ---- screens ------------------------------------------------------------
+
+  private renderScreensGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setHeading().setName(t("screens.settings.heading"));
+    const screens = this.host.listScreens();
+    if (!screens) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("screens.settings.unavailable") });
+      return;
+    }
+    containerEl.createDiv({ cls: "aie-empty-state", text: t("screens.settings.intro") });
+
+    const settings = this.host.settings.screens;
+    new Setting(containerEl)
+      .setName(t("screens.settings.limit"))
+      .setDesc(t("screens.settings.limitDesc"))
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_SCREENS);
+        text.inputEl.max = String(MAX_SCREENS);
+        text.setValue(String(settings.maxScreens));
+        text.onChange(async (val) => {
+          const num = parseInt(val, 10);
+          if (Number.isFinite(num) && num >= MIN_SCREENS && num <= MAX_SCREENS) {
+            text.inputEl.removeClass("has-error");
+            settings.maxScreens = num;
+            await this.host.saveSettings();
+          } else {
+            text.inputEl.addClass("has-error");
+          }
+        });
+      });
+
+    if (screens.length === 0) {
+      containerEl.createDiv({ cls: "aie-empty-state", text: t("screens.settings.empty") });
+      return;
+    }
+    for (const screen of screens) {
+      new Setting(containerEl)
+        .setName(screen.titulo)
+        .setDesc(t("screens.settings.details", { tool: screenToolName(screen.slug), count: screen.campos.length }))
+        .addButton((btn) =>
+          btn
+            .setButtonText(t("screens.settings.preview"))
+            .setIcon("eye")
+            .onClick(() => this.host.previewScreen(screen.slug)),
+        )
+        .addButton((btn) =>
+          btn
+            .setButtonText(t("screens.settings.remove"))
+            .setIcon("trash-2")
+            .setDestructive()
+            .onClick(() => this.confirmRemoveScreen(screen)),
+        );
+    }
+  }
+
+  private confirmRemoveScreen(screen: ScreenDefinition): void {
+    new ConfirmModal(this.app, {
+      title: t("screens.settings.removeTitle", { title: screen.titulo }),
+      paragraphs: [t("screens.settings.removeText", { tool: screenToolName(screen.slug) })],
+      confirmText: t("screens.settings.remove"),
+      icon: "alert-triangle",
+      danger: true,
+      onConfirm: () => {
+        if (this.host.removeScreen(screen.slug)) new Notice(t("screens.settings.removed", { title: screen.titulo }));
+        this.display();
+      },
+    }).open();
   }
 
   private renderServicesGroup(containerEl: HTMLElement): void {

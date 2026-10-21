@@ -1,0 +1,113 @@
+/* Styles of the screens area (agent-built forms). Use Obsidian CSS variables; class names start with aie-. */
+.aie-screen .aie-screen-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.aie-screen .aie-screen-context {
+  font-weight: var(--font-semibold);
+}
+
+.aie-screen .aie-screen-muted {
+  margin: 0 0 var(--size-4-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.aie-screen .aie-screen-warning {
+  margin-bottom: var(--size-4-2);
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+}
+
+.aie-modal.aie-screen .aie-screen-error {
+  min-height: 0;
+}
+
+.aie-screen .aie-screen-hidden {
+  display: none;
+}
+
+.aie-screen .aie-screen-required .setting-item-name::after {
+  content: " *";
+  color: var(--text-error);
+}
+
+.aie-screen .aie-screen-note p {
+  margin: 0 0 var(--size-4-1);
+}
+
+.aie-screen .aie-screen-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  margin-bottom: var(--size-4-2);
+}
+
+.aie-screen .aie-screen-option {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.aie-screen .aie-screen-slider-value {
+  min-width: 3ch;
+  margin-right: var(--size-4-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.aie-screen .aie-screen-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-1);
+}
+
+.aie-screen .aie-screen-list-row input {
+  flex: 1;
+}
+
+.aie-screen .aie-screen-table {
+  overflow-x: auto;
+}
+
+.aie-screen .aie-screen-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.aie-screen .aie-screen-table th {
+  padding: var(--size-4-1) var(--size-4-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  text-align: left;
+}
+
+.aie-screen .aie-screen-table td {
+  padding: var(--size-4-1) var(--size-4-2);
+}
+
+.aie-screen .aie-screen-table td input[type="text"],
+.aie-screen .aie-screen-table td input[type="number"] {
+  width: 100%;
+}
+
+.aie-screen .aie-screen-frame {
+  max-height: 50vh;
+  margin-bottom: var(--size-4-3);
+  padding: var(--size-4-3);
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.aie-screen .aie-screen-json {
+  margin-bottom: var(--size-4-2);
+}
+
+.aie-screen .aie-screen-json summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}

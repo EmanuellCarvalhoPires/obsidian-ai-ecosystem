@@ -16,8 +16,22 @@ export interface ServerPresentation {
 /** Explains why the server is not on the configured port (or not running). Undefined when there is nothing to report. */
 export function conflictMessage(status: ServerStatus): string | undefined {
   if (!status.running && status.error) return t("server.conflict.failed", { error: status.error });
+  if (!status.running) return undefined;
+  const base = status.usingAlternativePort ? alternativeMessage(status) : undefined;
+  // The port is not the one the MCP clients of this vault used last time: they need the new URL.
+  const changed = status.previousPort !== undefined ? t("server.portChanged", { oldPort: status.previousPort, altPort: status.port }) : undefined;
+  if (base && changed) return `${base} ${changed}`;
+  return base ?? changed;
+}
+
+function alternativeMessage(status: ServerStatus): string | undefined {
   const conflict = status.conflict;
-  if (!status.running || !status.usingAlternativePort || !conflict) return undefined;
+  if (!conflict) {
+    // No conflict info: this vault kept the port it used last time, without trying the configured one first.
+    return status.configuredPort !== undefined
+      ? t("server.conflict.remembered", { port: status.configuredPort, altPort: status.port })
+      : undefined;
+  }
   const vars = { port: conflict.port, altPort: status.port };
   switch (conflict.owner) {
     case "environment-keys-1":
@@ -38,12 +52,12 @@ export function conflictMessage(status: ServerStatus): string | undefined {
 export function presentServer(status: ServerStatus): ServerPresentation {
   if (status.running) {
     if (!status.usingAlternativePort) {
-      return { state: "running", icon: "circle-check", title: t("core.state.running", { port: status.port }) };
+      return { state: "running", icon: "circle-check", title: t("core.state.running", { port: status.port }), detail: conflictMessage(status) };
     }
     return {
       state: "alternative",
       icon: "alert-triangle",
-      title: t("core.state.alternative", { port: status.port }),
+      title: t(status.conflict ? "core.state.alternative" : "core.state.remembered", { port: status.port }),
       detail: conflictMessage(status),
     };
   }
@@ -67,7 +81,7 @@ export function statusBarText(status: ServerStatus): string {
     case "running":
       return t("core.status.running", { port: status.port });
     case "alternative":
-      return t("core.status.alternative", { port: status.port });
+      return t(status.conflict ? "core.status.alternative" : "core.status.remembered", { port: status.port });
     case "conflict":
     case "waiting":
       return t("core.status.conflict");
@@ -85,6 +99,8 @@ function conflictKey(status: ServerStatus, conflict: PortConflict | undefined): 
     status.running,
     status.port,
     status.usingAlternativePort,
+    status.configuredPort ?? 0,
+    status.previousPort ?? 0,
     status.error ?? "",
     conflict?.port ?? 0,
     conflict?.owner ?? "",

@@ -1,14 +1,20 @@
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import { currentLanguage, t } from "../i18n";
+import type { HookInstallPlan } from "../hooks/hook-manager";
+import { HooksInstallModal } from "../settings/modals";
 import type { Catalog, CatalogEntry, ModuleInstallState } from "../types";
 import type { CatalogService } from "./catalog-service";
-import type { InstallerService, LatestRelease } from "./installer-service";
+import { installFromCatalog } from "./install-flow";
+import type { CatalogSetupHost } from "./install-flow";
+import type { InstallerService, InstallResult, LatestRelease } from "./installer-service";
 
 export const CATALOG_VIEW_TYPE = "ai-ecosystem-catalog";
 
 export interface CatalogViewDeps {
   catalog: CatalogService;
   installer: InstallerService;
+  /** The setup side of the core. Without it a module installs with no confirmation and no setup. */
+  setup?: CatalogSetupHost;
 }
 
 export class CatalogView extends ItemView {
@@ -67,7 +73,7 @@ export class CatalogView extends ItemView {
     if (!entry) return;
     switch (action) {
       case "install":
-        void this.runInstall(entry, "install");
+        void this.runCatalogInstall(entry);
         break;
       case "update":
         void this.runInstall(entry, "update");
@@ -226,23 +232,56 @@ export class CatalogView extends ItemView {
     return m ? t("catalog.requiresEcosystem", { version: m[1] }) : reason;
   }
 
+  /** Install: the confirmation comes first, then the download, then the setup of the module. */
+  private async runCatalogInstall(entry: CatalogEntry): Promise<void> {
+    this.errors.delete(entry.id);
+    const outcome = await installFromCatalog({
+      entry,
+      setup: this.deps.setup,
+      confirm: (plan) => this.confirmInstall(entry, plan),
+      install: () => this.deps.installer.install(entry),
+      onInstalling: () => this.render(),
+    });
+    if (outcome.status === "cancelled") {
+      new Notice(t("catalog.installCancelled", { name: entry.name }));
+      return;
+    }
+    this.report(entry, "install", outcome.result);
+    if (outcome.result.ok && outcome.setupPending) {
+      new Notice(t(outcome.nodeMissing ? "catalog.setupNodeMissing" : "catalog.setupPending", { name: entry.name }));
+    }
+    this.render();
+  }
+
+  private confirmInstall(entry: CatalogEntry, plan: HookInstallPlan): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      new HooksInstallModal(this.app, {
+        moduleName: entry.name,
+        plan,
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+      }).open();
+    });
+  }
+
   private async runInstall(entry: CatalogEntry, mode: "install" | "update"): Promise<void> {
     this.errors.delete(entry.id);
     const pending = mode === "install" ? this.deps.installer.install(entry) : this.deps.installer.update(entry);
     this.render();
-    const result = await pending;
+    this.report(entry, mode, await pending);
+    this.render();
+  }
+
+  private report(entry: CatalogEntry, mode: "install" | "update", result: InstallResult): void {
     if (result.ok) {
       new Notice(t(mode === "install" ? "catalog.installOk" : "catalog.updateOk", { name: entry.name }));
+    } else if (result.error === "No release published yet") {
+      this.errors.set(entry.id, t("catalog.noRelease"));
+      new Notice(t("catalog.noRelease"));
     } else {
-      if (result.error === "No release published yet") {
-        this.errors.set(entry.id, t("catalog.noRelease"));
-        new Notice(t("catalog.noRelease"));
-      } else {
-        this.errors.set(entry.id, result.error);
-        new Notice(t("catalog.installFailed", { name: entry.name, error: result.error }));
-      }
+      this.errors.set(entry.id, result.error);
+      new Notice(t("catalog.installFailed", { name: entry.name, error: result.error }));
     }
-    this.render();
   }
 
   private async runEnable(entry: CatalogEntry): Promise<void> {
