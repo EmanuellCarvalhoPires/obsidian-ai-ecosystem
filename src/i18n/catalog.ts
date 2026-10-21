@@ -22,6 +22,10 @@ export const catalogStrings: StringTable = {
     "catalog.installedVersion": "Installed: {version}",
     "catalog.latestVersion": "Latest: {version}",
     "catalog.installOk": "{name} installed and enabled.",
+    "catalog.installCancelled":
+      "{name} was not installed. It needs the Claude Code hooks (setup skill, setup hook and protection hooks) to work as designed.",
+    "catalog.setupPending": "{name} is installed and waits for its setup: send any message in Claude Code in this vault (or open a new session) and the setup skill starts by itself.",
+    "catalog.setupNodeMissing": "{name} is installed but pending: Node.js was not found, so no hook was written. Install Node.js (nodejs.org) and restart Obsidian.",
     "catalog.updateOk": "{name} updated.",
     "catalog.enableOk": "{name} enabled.",
     "catalog.installFailed": "Could not install {name}: {error}. Opening the store page.",
@@ -50,6 +54,10 @@ export const catalogStrings: StringTable = {
     "catalog.installedVersion": "Instalada: {version}",
     "catalog.latestVersion": "Mais recente: {version}",
     "catalog.installOk": "{name} instalado e ativado.",
+    "catalog.installCancelled":
+      "{name} não foi instalado. Ele precisa dos hooks do Claude Code (skill de configuração, hook de configuração e hooks de proteção) para funcionar como projetado.",
+    "catalog.setupPending": "{name} está instalado e aguarda a configuração: envie qualquer mensagem no Claude Code neste cofre (ou abra uma sessão nova) e a skill de configuração começa sozinha.",
+    "catalog.setupNodeMissing": "{name} está instalado, mas pendente: o Node.js não foi encontrado, então nenhum hook foi gravado. Instale o Node.js (nodejs.org) e reinicie o Obsidian.",
     "catalog.updateOk": "{name} atualizado.",
     "catalog.enableOk": "{name} ativado.",
     "catalog.installFailed": "Não foi possível instalar {name}: {error}. Abrindo a página da loja.",

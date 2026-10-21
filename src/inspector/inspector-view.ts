@@ -85,7 +85,7 @@ export class InspectorView extends ItemView {
     const { workspace } = this.app;
     // Se aberto na barra lateral (não no rootSplit), migra automaticamente para uma nova aba e fecha a lateral
     if (this.leaf.getRoot() !== workspace.rootSplit) {
-      setTimeout(async () => {
+      window.setTimeout(() => void (async () => {
         const existingTab = workspace.getLeavesOfType(INSPECTOR_VIEW_TYPE).find((l) => l.getRoot() === workspace.rootSplit);
         this.leaf.detach();
         if (existingTab) {
@@ -97,7 +97,7 @@ export class InspectorView extends ItemView {
             await workspace.revealLeaf(tabLeaf);
           }
         }
-      }, 0);
+      })(), 0);
       return;
     }
 
@@ -431,7 +431,7 @@ export class InspectorView extends ItemView {
     const chips = summary.createSpan({ cls: "aie-act-chips" });
     if (entry.moduleId) {
       const chip = chips.createSpan({ cls: "aie-act-chip" });
-      setIcon(chip.createSpan({ cls: "aie-act-chip-icon" }), "box");
+      setIcon(chip.createSpan({ cls: "aie-act-chip-icon" }), moduleIcon(entry.moduleId));
       chip.createSpan({ text: entry.moduleId });
     }
     if (entry.client) {
@@ -621,6 +621,25 @@ function displayTool(entry: ActivityEntry): string {
   if (entry.kind === "script") return `Script ${entry.method}`;
   if (entry.method === "MCP Tool Call") return entry.target;
   return entry.method;
+}
+
+function moduleIcon(moduleId: string): string {
+  switch (moduleId) {
+    case "ai-scripts":
+      return "terminal";
+    case "ai-templates":
+      return "file-spreadsheet";
+    case "telegram-ai-gateway":
+      return "send";
+    case "ai-vault-search":
+      return "search";
+    case "environment-variables":
+      return "key-round";
+    case "ai-ecosystem":
+      return "cpu";
+    default:
+      return "box";
+  }
 }
 
 function formatDataBlock(raw: string): string {

@@ -1,8 +1,11 @@
 // Wires the pure-Node parts of the AI Ecosystem together (registry, service bus, lifecycle,
 // Provider API, Script Engine, inspector logger, server). No "obsidian" import: main.ts adds
 // the Obsidian side (views, settings, notices) and the integration tests use this class as is.
+import * as nodePath from "node:path";
 import { EcosystemLifecycle } from "../api/lifecycle";
 import { ProviderApi, createPublicApi } from "../api/provider-api";
+import { HookManager } from "../hooks/hook-manager";
+import type { HookManagerDeps } from "../hooks/hook-manager";
 import { ActivityDatabase } from "../inspector/activity-db";
 import { LiveLogger } from "../inspector/live-logger";
 import { createRedactor } from "../inspector/redaction";
@@ -11,10 +14,15 @@ import { ModuleRegistry } from "../registry/module-registry";
 import { ServiceBus } from "../registry/service-bus";
 import { BinaryDetector } from "../runner/binary-detector";
 import { ScriptEngine } from "../runner/script-engine";
+import type { ScreenHost } from "../screens/host";
+import { ScreenService } from "../screens/service";
+import { ScreenStore, screensDir } from "../screens/store";
+import { SetupManager } from "../setup/setup-manager";
+import type { Lang } from "../i18n";
 import { ClientAuth } from "../server/auth";
 import { ServerHost } from "../server/server-host";
 import type { ServerHostOptions } from "../server/server-host";
-import { AI_ECOSYSTEM_API_VERSION, SECRETS_SERVICE, SUPPORTED_API_VERSIONS } from "../types";
+import { AI_ECOSYSTEM_API_VERSION, ECOSYSTEM_ID, HOOKS_SERVICE, SECRETS_SERVICE, SUPPORTED_API_VERSIONS } from "../types";
 import type {
   AIEcosystemAPI,
   AIEcosystemSettings,
@@ -23,7 +31,8 @@ import type {
   SecretVaultService,
   ServerStatus,
 } from "../types";
-import { BASE_MCP_INSTRUCTIONS, createBuiltinModule } from "./builtin-module";
+import { BASE_MCP_INSTRUCTIONS, createBuiltinModule, createBuiltinTools } from "./builtin-module";
+import type { BuiltinModuleDeps } from "./builtin-module";
 
 export interface EcosystemDeps {
   vaultBasePath: string;
@@ -45,6 +54,26 @@ export interface EcosystemDeps {
   /** Extra server options (tests: probe, transitionWaitMs). */
   serverOptions?: Partial<ServerHostOptions>;
   detector?: BinaryDetector;
+  /** app.vault.configDir. */
+  configDir?: string;
+  /** Language of the setup skills and of the usage guide blocks (the Obsidian language). Default: English. */
+  language?: () => Lang;
+  /** Script folders were added to the allowed list by the guided setup (Obsidian shows a notice). */
+  onScriptFoldersAdded?: (folders: string[]) => void;
+  /** Tests: how long a module's setup handler may take (default 5000). */
+  setupHandlerTimeoutMs?: number;
+  /** Saves data.json (the guided setup changes the allowed script folders). */
+  saveSettings?: () => Promise<void>;
+  /** Whether the Obsidian plugin of a module is still enabled (Claude Code hooks mark disabled modules). */
+  isPluginEnabled?: (moduleId: string) => boolean;
+  /** The Claude Code hooks need an absolute vault folder; "disabled" turns them off (tests). */
+  hooks?: { disabled?: boolean } & Partial<Pick<HookManagerDeps, "nodeChecker" | "disableCheckDelayMs" | "heartbeatIntervalMs" | "ruleDebounceMs">>;
+  /** Something about the Claude Code hooks changed (the settings tab refreshes). */
+  onHooksChange?: () => void;
+  /** Opens the screen windows. Without it the screen tools (tela_*) are not offered. */
+  screenHost?: ScreenHost;
+  /** Folder of the saved screens. Default: <vault>/<configDir>/plugins/ai-ecosystem/telas (needs configDir). */
+  screensDir?: string;
 }
 
 export class Ecosystem {
@@ -59,8 +88,15 @@ export class Ecosystem {
   readonly auth: ClientAuth;
   readonly server: ServerHost;
   readonly providerApi: ProviderApi;
+  /** Claude Code hooks, setup state and the "hooks" service. Undefined without a vault folder. */
+  readonly hooks: HookManager | undefined;
+  /** Guided setup of the modules (skills, setup hooks, GEMINI.md). Undefined together with the hooks. */
+  readonly setup: SetupManager | undefined;
+  /** Saved screens and the tela_* tools. Undefined without a screen host or a place to save them. */
+  readonly screens: ScreenService | undefined;
   /** The frozen facade handed to modules. */
   readonly api: AIEcosystemAPI;
+  private readonly builtin: BuiltinModuleDeps;
   private disposed = false;
 
   constructor(private readonly deps: EcosystemDeps) {
@@ -87,9 +123,38 @@ export class Ecosystem {
       onChange: (change) => {
         if (change.type !== "prompts-changed") this.server.notifyListChanged("tools");
         if (change.type !== "tools-changed") this.server.notifyListChanged("prompts");
+        this.hooks?.handleRegistryChange(change);
         deps.onRegistryChange?.(change);
       },
     });
+
+    if (nodePath.isAbsolute(deps.vaultBasePath) && !deps.hooks?.disabled) {
+      this.hooks = new HookManager({
+        vaultBasePath: deps.vaultBasePath,
+        configDir: deps.configDir,
+        listModules: () => this.registry.listModules(),
+        listTools: () => this.registry.listTools(),
+        isPluginEnabled: deps.isPluginEnabled,
+        onChange: deps.onHooksChange,
+        ...deps.hooks,
+      });
+      this.bus.register(HOOKS_SERVICE, ECOSYSTEM_ID, this.hooks.service);
+      this.setup = new SetupManager({
+        hooks: this.hooks,
+        vaultBasePath: deps.vaultBasePath,
+        configDir: deps.configDir,
+        language: deps.language ?? (() => "en"),
+        listModules: () => this.registry.listModules(),
+        listTools: () => this.registry.listTools(),
+        getSettings: deps.getSettings,
+        saveSettings: deps.saveSettings,
+        handlerTimeoutMs: deps.setupHandlerTimeoutMs,
+        activity: this.logger,
+        onScriptFoldersAdded: deps.onScriptFoldersAdded,
+        notifyToolsChanged: () => this.server.notifyListChanged("tools"),
+      });
+      this.hooks.setListener(this.setup);
+    }
 
     this.detector = deps.detector ?? new BinaryDetector();
     this.engine = new ScriptEngine({
@@ -110,6 +175,7 @@ export class Ecosystem {
       return {
         port: settings.port,
         alternativePort: settings.alternativePort,
+        lastPort: settings.lastPort,
         registry: this.registry,
         auth: this.auth,
         activity: this.logger,
@@ -117,6 +183,8 @@ export class Ecosystem {
         apiVersion: AI_ECOSYSTEM_API_VERSION,
         vaultName: deps.vaultName,
         getMcpInstructions: () => BASE_MCP_INSTRUCTIONS,
+        isToolHidden: (registered, kind) => this.hooks?.isToolHidden(registered, kind) ?? false,
+        onToolResult: (moduleId, isError) => this.hooks?.recordToolResult(moduleId, isError),
         ...deps.serverOptions,
         onStatusChange: (status) => this.handleStatus(status),
       };
@@ -133,22 +201,36 @@ export class Ecosystem {
     });
     this.api = createPublicApi(this.providerApi);
 
+    const folder = deps.screensDir ?? (deps.vaultBasePath && deps.configDir ? screensDir(deps.vaultBasePath, deps.configDir) : undefined);
+    if (deps.screenHost && folder) {
+      this.screens = new ScreenService({
+        store: new ScreenStore(folder),
+        host: deps.screenHost,
+        getLimit: () => deps.getSettings().screens.maxScreens,
+        getSecrets,
+        // A screen was created, changed or removed: the registry notifies the clients of the new tool list.
+        onChange: () => this.refreshBuiltinTools(),
+      });
+      for (const problem of this.screens.load()) console.warn(`[AI Ecosystem] Screen not loaded: ${problem}`);
+    }
+
     // The built-in module is registered directly: modules registered through the Provider API
     // get lifecycle events, this one is part of the AI Ecosystem itself.
-    const registered = this.registry.register(
-      createBuiltinModule({
-        version: deps.version,
-        getServerStatus: () => this.server.getStatus(),
-        listModules: () => this.registry.listModules(),
-        listServices: () => this.bus.list(),
-        scripts: {
-          engine: this.engine,
-          vaultBasePath: deps.vaultBasePath,
-          getSettings: () => deps.getSettings().scripts,
-          getDeclaredScripts: deps.getDeclaredScripts,
-        },
-      }),
-    );
+    this.builtin = {
+      version: deps.version,
+      getServerStatus: () => this.server.getStatus(),
+      listModules: () => this.registry.listModules(),
+      listServices: () => this.bus.list(),
+      scripts: {
+        engine: this.engine,
+        vaultBasePath: deps.vaultBasePath,
+        getSettings: () => deps.getSettings().scripts,
+        getDeclaredScripts: deps.getDeclaredScripts,
+      },
+      screens: this.screens,
+      setup: this.setup,
+    };
+    const registered = this.registry.register(createBuiltinModule(this.builtin));
     if (!registered.ok) console.error(`[AI Ecosystem] Could not register the built-in module: ${registered.reason}`);
   }
 
@@ -157,6 +239,8 @@ export class Ecosystem {
    * port while the server retries it, then starts the server.
    */
   start(): Promise<ServerStatus> {
+    this.hooks?.start();
+    this.setup?.start();
     this.lifecycle.announceReady(this.api);
     return this.server.start();
   }
@@ -165,6 +249,10 @@ export class Ecosystem {
   unload(): Promise<void> {
     this.disposed = true;
     try {
+      // Stops the heartbeat; the hook entries in the Claude Code settings stay.
+      this.setup?.dispose();
+      this.hooks?.dispose();
+      this.screens?.dispose();
       this.lifecycle.announceUnloading();
       this.registry.clear();
       this.bus.clear();
@@ -177,6 +265,12 @@ export class Ecosystem {
     return this.server.stop().catch((err: unknown) => {
       console.warn("[AI Ecosystem] Error while stopping the server", err);
     });
+  }
+
+  /** Registers the tools of the built-in module again (a screen tool appeared, changed or went away). */
+  private refreshBuiltinTools(): void {
+    if (this.disposed || !this.registry.has(ECOSYSTEM_ID)) return;
+    this.registry.updateTools(ECOSYSTEM_ID, createBuiltinTools(this.builtin));
   }
 
   private handleStatus(status: ServerStatus): void {

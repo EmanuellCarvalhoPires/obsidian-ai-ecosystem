@@ -8,6 +8,8 @@ export const MIN_TIMEOUT_SECONDS = 1;
 export const MAX_TIMEOUT_SECONDS = 3600;
 export const MIN_ENTRIES = 50;
 export const MAX_ENTRIES = 5000;
+export const MIN_SCREENS = 1;
+export const MAX_SCREENS = 200;
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/i;
 
@@ -117,10 +119,11 @@ export function normalizeSettings(raw: unknown): AIEcosystemSettings {
   const data = isRecord(raw) ? raw : {};
   const port = isValidPort(data.port) ? data.port : DEFAULT_SETTINGS.port;
   const inspector = isRecord(data.inspector) ? data.inspector : {};
+  const screens = isRecord(data.screens) ? data.screens : {};
   const imported = Array.isArray(data.importedClientsFrom)
     ? [...new Set(data.importedClientsFrom.filter((v): v is string => typeof v === "string" && v !== ""))]
     : [];
-  return {
+  const settings: AIEcosystemSettings = {
     port,
     alternativePort: pickAlternativePort(port, data.alternativePort),
     clients: normalizeClients(data.clients),
@@ -129,7 +132,12 @@ export function normalizeSettings(raw: unknown): AIEcosystemSettings {
     inspector: {
       maxEntries: clampInt(inspector.maxEntries, MIN_ENTRIES, MAX_ENTRIES, DEFAULT_SETTINGS.inspector.maxEntries),
     },
+    screens: {
+      maxScreens: clampInt(screens.maxScreens, MIN_SCREENS, MAX_SCREENS, DEFAULT_SETTINGS.screens.maxScreens),
+    },
   };
+  if (isValidPort(data.lastPort)) settings.lastPort = data.lastPort;
+  return settings;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +151,7 @@ function interpreterLanguage(key: string): ScriptLanguage | undefined {
   return SCRIPT_LANGUAGES.find((l) => l === language);
 }
 
-/** Current value of a settings control (keys: port, alternativePort, scripts.maxTimeoutSeconds, scripts.interpreter.<language>, inspector.maxEntries). */
+/** Current value of a settings control (keys: port, alternativePort, scripts.maxTimeoutSeconds, scripts.interpreter.<language>, inspector.maxEntries, screens.maxScreens). */
 export function readSetting(settings: AIEcosystemSettings, key: string): unknown {
   switch (key) {
     case "port":
@@ -154,6 +162,8 @@ export function readSetting(settings: AIEcosystemSettings, key: string): unknown
       return settings.scripts.maxTimeoutSeconds;
     case "inspector.maxEntries":
       return settings.inspector.maxEntries;
+    case "screens.maxScreens":
+      return settings.screens.maxScreens;
     default: {
       const language = interpreterLanguage(key);
       return language ? (settings.scripts.interpreterPaths[language] ?? "") : undefined;
@@ -169,16 +179,21 @@ export function writeSetting(settings: AIEcosystemSettings, key: string, value: 
     case "port":
       if (!isValidPort(value) || value === settings.alternativePort || value === settings.port) return [];
       settings.port = value;
+      delete settings.lastPort; // an explicit choice wins over the remembered port
       return ["restart-server"];
     case "alternativePort":
       if (!isValidPort(value) || value === settings.port || value === settings.alternativePort) return [];
       settings.alternativePort = value;
+      delete settings.lastPort;
       return ["restart-server"];
     case "scripts.maxTimeoutSeconds":
       settings.scripts.maxTimeoutSeconds = clampInt(value, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS, settings.scripts.maxTimeoutSeconds);
       return [];
     case "inspector.maxEntries":
       settings.inspector.maxEntries = clampInt(value, MIN_ENTRIES, MAX_ENTRIES, settings.inspector.maxEntries);
+      return [];
+    case "screens.maxScreens":
+      settings.screens.maxScreens = clampInt(value, MIN_SCREENS, MAX_SCREENS, settings.screens.maxScreens);
       return [];
     default: {
       const language = interpreterLanguage(key);

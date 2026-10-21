@@ -24,6 +24,22 @@ const stylesPlugin = {
   },
 };
 
+// "import text from './file.mjs?raw'" embeds the file as a string (the Claude Code hook script).
+const rawPlugin = {
+  name: "raw",
+  setup(build) {
+    build.onResolve({ filter: /\?raw$/ }, (args) => ({
+      path: path.resolve(args.resolveDir, args.path.slice(0, -"?raw".length)),
+      namespace: "raw",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "raw" }, (args) => ({
+      contents: fs.readFileSync(args.path, "utf8"),
+      loader: "text",
+      watchFiles: [args.path],
+    }));
+  },
+};
+
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
@@ -51,7 +67,7 @@ const context = await esbuild.context({
   treeShaking: true,
   outfile: "main.js",
   minify: prod,
-  plugins: [stylesPlugin],
+  plugins: [stylesPlugin, rawPlugin],
 });
 
 if (prod) {
