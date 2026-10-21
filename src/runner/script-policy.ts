@@ -200,10 +200,11 @@ export function validateRun(
     }
   }
 
-  const needsSecrets = Object.values(env).some((v) => SECRET_PLACEHOLDER.test(v));
+  const needsSecrets =
+    Object.values(env).some((v) => SECRET_PLACEHOLDER.test(v)) || (options.args ?? []).some((a) => SECRET_PLACEHOLDER.test(String(a)));
   if (needsSecrets) {
     if (!ctx.secretsAvailable) {
-      return refuse("secrets-unavailable", "Environment variables with {{secret:...}} placeholders need the Environment Keys plugin.");
+      return refuse("secrets-unavailable", "Environment variables and arguments with {{secret:...}} placeholders need the Environment Keys plugin.");
     }
     if (ctx.secretsLocked) {
       return refuse("secrets-locked", "The Environment Keys vault is locked. Unlock it in Obsidian (Environment Keys panel) and try again.");

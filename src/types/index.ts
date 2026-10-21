@@ -125,10 +125,19 @@ export interface HubToolResult {
   isError?: boolean;
 }
 
+/** Which kind of AI client made a call, from the MCP clientInfo (or the client token name). */
+export type ClientKind = "claude-code" | "antigravity" | "other";
+
 export interface HubCallContext {
   client: ClientContext;
   /** Module that owns the tool or prompt. */
   moduleId: string;
+  clientKind?: ClientKind;
+  /**
+   * Aborted when the client sends notifications/cancelled for this call or closes the HTTP
+   * connection before the answer. Long-running tools (e.g. screens) should stop when it fires.
+   */
+  signal?: AbortSignal;
 }
 
 export interface HubTool {
@@ -146,6 +155,11 @@ export interface HubTool {
     idempotentHint?: boolean;
     openWorldHint?: boolean;
   };
+  /**
+   * The tool stays visible to Claude Code while its module is still waiting for the first
+   * setup (e.g. a tool the setup skill itself uses). Other tools of that module are hidden.
+   */
+  availableDuringSetup?: boolean;
   handler: (args: Record<string, unknown>, ctx: HubCallContext) => Promise<HubToolResult>;
 }
 
@@ -286,6 +300,69 @@ export interface SecretVaultService {
     spawnFn: (resolvedEnv: Record<string, string>) => void,
     callerModuleId: string,
   ): Promise<void>;
+  /** Like spawnWithSecrets, but also resolves placeholders in args. Optional: older Environment Keys lack it. */
+  spawnWithSecretsAndArgs?(
+    input: { env: Record<string, string>; args: string[] },
+    spawnFn: (resolved: { env: Record<string, string>; args: string[] }) => void | Promise<void>,
+    callerModuleId: string,
+  ): Promise<void>;
+  /** True when a secret OR a value already uses this name. Optional: older Environment Keys lack it. */
+  nameExists?(name: string): boolean;
+  /**
+   * Creates an entry in the "Values" section of Environment Keys. Never overwrites and never
+   * returns the value. Optional: older Environment Keys lack it.
+   */
+  createValue?(input: {
+    name: string;
+    kind: ValueKind;
+    value: string;
+    description?: string;
+    createdBy: string;
+  }): Promise<{ ok: true } | { ok: false; reason: "exists" | "locked" | "invalid_name" | "empty" }>;
+}
+
+/** Kinds of entry in the Environment Keys "Values" section. */
+export type ValueKind = "texto" | "numero" | "url" | "email" | "json" | "senha";
+
+// ---------------------------------------------------------------------------
+// Hooks service (Claude Code hooks, module setup state)
+// ---------------------------------------------------------------------------
+
+/** Name of the service the AI Ecosystem registers for the modules (see HooksService). */
+export const HOOKS_SERVICE = "hooks";
+
+/** Data a module gives the core so the Claude Code protection hooks know what to guard. */
+export interface HookRuleData {
+  /** environment-variables: allowed host patterns of secrets WITHOUT full access / any host. */
+  hosts?: string[];
+  /** ai-scripts: vault-relative folders whose scripts must run through the plugin. */
+  scriptFolders?: string[];
+  /** ai-templates: vault-relative target path patterns of the templates ({{...}} becomes *). */
+  templateTargets?: string[];
+  /** environment-variables: vault-relative folders of tool notes (Grep stays allowed there). */
+  toolNoteFolders?: string[];
+  /** ai-vault-search: vault-relative folders outside the index (Grep stays allowed there). Becomes pastas.json "foraDoIndice". */
+  excludedFolders?: string[];
+}
+
+export interface SetupHandler {
+  /** Facts the module detects by itself (never secret values). */
+  detect?(): Promise<Record<string, unknown>>;
+  /** Applies one answer. Returns an error message to refuse it. */
+  save?(key: string, value: unknown): Promise<string | void>;
+  /** Called by ecosystem_setup_complete. ok:false blocks completion and lists what is missing. */
+  validate?(): Promise<{ ok: boolean; missing?: string[] }>;
+}
+
+export type ModuleSetupState = "pendente_configuracao" | "configurado" | "desativado";
+
+/** The "hooks" service. Modules never touch .claude/: they feed the core through it. */
+export interface HooksService {
+  /** Replaces the data of that module; the core rewrites hosts.json and pastas.json (debounced). */
+  setRuleData(moduleId: string, data: HookRuleData): void;
+  /** Returns an unregister function. */
+  registerSetupHandler(moduleId: string, handler: SetupHandler): () => void;
+  getModuleState(moduleId: string): ModuleSetupState | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +389,8 @@ export interface HubScriptOptions {
   stdin?: string;
   /** Cancellation signal to immediately terminate the running process. */
   signal?: AbortSignal;
+  /** When true, the Script Engine skips logging an activity entry (e.g. caller logs it). */
+  skipActivityLog?: boolean;
   onStdout?: (data: string) => void;
   onStderr?: (data: string) => void;
 }
@@ -355,9 +434,20 @@ export interface ActivityInput {
   requestHeaders?: Record<string, string>;
   payload?: unknown;
   response?: unknown;
+  /** Process output, stdout/stderr, or custom module text. */
+  output?: string;
   /** Shows an alert badge (e.g. script run with the restrictions off). */
   alert?: boolean;
   time?: number;
+}
+
+export interface ActivityBeginInput {
+  moduleId: string;
+  client?: string;
+  type: string;
+  target: string;
+  payload?: unknown;
+  alert?: boolean;
 }
 
 export interface ActivityEntry {
@@ -424,8 +514,12 @@ export interface ServerStatus {
   running: boolean;
   /** Port in use (or the configured port when not running). */
   port: number;
-  /** True when running on the alternative port because the configured one was taken. */
+  /** True whenever the bound port differs from the configured one (it was busy, or this vault kept the port it used last time). */
   usingAlternativePort: boolean;
+  /** The configured port, set when usingAlternativePort is true. */
+  configuredPort?: number;
+  /** The port this vault used last time, when it differs from the one in use now (MCP client configs may need the new URL). */
+  previousPort?: number;
   conflict?: PortConflict;
   /** Last start error, e.g. "Port 27160 is also in use". */
   error?: string;
@@ -467,7 +561,11 @@ export interface AIEcosystemAPI {
     durationMs: number;
     payload?: unknown;
     response?: unknown;
+    output?: string;
+    alert?: boolean;
   }): void;
+
+  beginActivity?(entry: ActivityBeginInput): ActivityHandle;
 
   getServerStatus(): { running: boolean; port: number; activeModules: string[] };
 }
@@ -490,11 +588,15 @@ export interface ScriptSettings {
 export interface AIEcosystemSettings {
   port: number;
   alternativePort: number;
+  /** Port the server actually used last time. Tried first on start, so MCP clients keep their URL. Cleared when a port setting changes. */
+  lastPort?: number;
   clients: ClientRecord[];
   /** Module ids whose clients were already imported (import happens once). */
   importedClientsFrom: string[];
   scripts: ScriptSettings;
   inspector: { maxEntries: number };
+  /** Screens the agent can create (tela_criar). */
+  screens: { maxScreens: number };
 }
 
 export const DEFAULT_SETTINGS: AIEcosystemSettings = {
@@ -509,6 +611,7 @@ export const DEFAULT_SETTINGS: AIEcosystemSettings = {
     interpreterPaths: {},
   },
   inspector: { maxEntries: 500 },
+  screens: { maxScreens: 30 },
 };
 
 // ---------------------------------------------------------------------------

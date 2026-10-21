@@ -4,6 +4,7 @@ import {
   AI_ECOSYSTEM_API_VERSION,
   ECOSYSTEM_ID,
   type AIEcosystemAPI,
+  type ActivityHandle,
   type ActivitySink,
   type ClientRecord,
   type HubModuleRegistration,
@@ -31,6 +32,7 @@ export interface ProviderApiDeps {
 }
 
 type ActivityEntryInput = Parameters<AIEcosystemAPI["logActivity"]>[0];
+type ActivityBeginInput = NonNullable<Parameters<NonNullable<AIEcosystemAPI["beginActivity"]>>[0]>;
 
 export class ProviderApi implements AIEcosystemAPI {
   readonly apiVersion = AI_ECOSYSTEM_API_VERSION;
@@ -119,10 +121,24 @@ export class ProviderApi implements AIEcosystemAPI {
         durationMs: entry.durationMs,
         payload: entry.payload,
         response: entry.response,
+        output: entry.output,
+        alert: entry.alert,
       });
     } catch (err) {
       console.warn("[AI Ecosystem] Could not log module activity", err);
     }
+  }
+
+  beginActivity(entry: ActivityBeginInput): ActivityHandle {
+    return this.deps.activity.begin({
+      kind: "module",
+      method: entry.type,
+      target: entry.target,
+      moduleId: entry.moduleId,
+      client: entry.client ?? `module:${entry.moduleId}`,
+      payload: entry.payload,
+      alert: entry.alert,
+    });
   }
 
   getServerStatus(): { running: boolean; port: number; activeModules: string[] } {
@@ -155,6 +171,7 @@ export function createPublicApi(impl: AIEcosystemAPI): AIEcosystemAPI {
     importClients: (clients: ClientRecord[], sourceModuleId: string) => impl.importClients(clients, sourceModuleId),
     runScript: (options: HubScriptOptions, callerModuleId: string) => impl.runScript(options, callerModuleId),
     logActivity: (entry: ActivityEntryInput) => impl.logActivity(entry),
+    beginActivity: (entry: ActivityBeginInput) => impl.beginActivity?.(entry) as ActivityHandle,
     getServerStatus: () => impl.getServerStatus(),
   });
 }

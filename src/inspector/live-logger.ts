@@ -143,7 +143,7 @@ export class LiveLogger implements ActivitySink {
       requestHeaders: this.redactor.headers(input.requestHeaders ?? {}),
       payload: input.payload === undefined ? "" : this.redactor.value(input.payload),
       response: input.response === undefined ? "" : this.redactor.value(input.response),
-      output: "",
+      output: input.output ? this.redactor.text(input.output) : "",
       alert: input.alert ?? false,
       running,
     };

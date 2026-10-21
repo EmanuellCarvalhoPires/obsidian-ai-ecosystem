@@ -6,6 +6,7 @@ import { catalogStrings } from "./i18n/catalog";
 import { coreStrings } from "./i18n/core";
 import { inspectorStrings } from "./i18n/inspector";
 import { runnerStrings } from "./i18n/runner";
+import { screensStrings } from "./i18n/screens";
 import { serverStrings } from "./i18n/server";
 import { settingsStrings } from "./i18n/settings";
 
@@ -16,7 +17,7 @@ export interface StringTable {
   pt: Record<string, string>;
 }
 
-const tables: StringTable[] = [coreStrings, serverStrings, runnerStrings, inspectorStrings, catalogStrings, settingsStrings];
+const tables: StringTable[] = [coreStrings, serverStrings, runnerStrings, inspectorStrings, catalogStrings, settingsStrings, screensStrings];
 
 const merged: StringTable = { en: {}, pt: {} };
 for (const table of tables) {

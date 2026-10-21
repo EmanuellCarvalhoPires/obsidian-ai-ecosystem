@@ -168,8 +168,9 @@ export class ScriptEngine {
         scriptPath = tempFile;
       }
       if (!scriptPath) throw new ScriptRefusedError("invalid-path", "No script to run.");
-      const args = this.detector.buildArgs(plan.language, scriptPath, plan.args, binary.prefixArgs);
-      return await this.execute(options, plan, caller, binary.command, args, secrets);
+      const fullPath = scriptPath;
+      const buildArgs = (scriptArgs: string[]): string[] => this.detector.buildArgs(plan.language, fullPath, scriptArgs, binary.prefixArgs);
+      return await this.execute(options, plan, caller, binary.command, buildArgs, secrets);
     } finally {
       if (tempFile) await fs.promises.rm(tempFile, { force: true }).catch(() => undefined);
     }
@@ -222,7 +223,7 @@ export class ScriptEngine {
     plan: RunPlan,
     caller: ScriptCaller,
     command: string,
-    args: string[],
+    buildArgs: (scriptArgs: string[]) => string[],
     secrets: SecretVaultService | undefined,
   ): Promise<ScriptExecutionResult> {
     const { deps } = this;
@@ -240,7 +241,7 @@ export class ScriptEngine {
       ],
     };
 
-    const handle: ActivityHandle = deps.activity.begin({
+    const handle: ActivityHandle = options.skipActivityLog ? { id: "skipped", appendOutput: () => {}, end: () => {} } : deps.activity.begin({
       kind: "script",
       method: "Script",
       target: plan.displayTarget,
@@ -277,9 +278,9 @@ export class ScriptEngine {
 
     let child: ChildProcess | undefined;
     let spawnThrown: unknown;
-    const doSpawn = (env: Record<string, string>): void => {
+    const doSpawn = (env: Record<string, string>, scriptArgs: string[] = plan.args): void => {
       try {
-        child = this.spawnImpl(command, args, { ...spawnOptions, env: { ...process.env, ...env } });
+        child = this.spawnImpl(command, buildArgs(scriptArgs), { ...spawnOptions, env: { ...process.env, ...env } });
       } catch (err) {
         spawnThrown = err;
       }
@@ -287,7 +288,16 @@ export class ScriptEngine {
 
     if (plan.needsSecrets && secrets) {
       try {
-        await secrets.spawnWithSecrets(plan.env, (resolvedEnv) => doSpawn(resolvedEnv), caller.moduleId);
+        // Newer Environment Keys also resolve {{secret:NAME}} in the arguments; older ones only in env.
+        if (typeof secrets.spawnWithSecretsAndArgs === "function") {
+          await secrets.spawnWithSecretsAndArgs(
+            { env: plan.env, args: plan.args },
+            (resolved) => doSpawn(resolved.env, resolved.args),
+            caller.moduleId,
+          );
+        } else {
+          await secrets.spawnWithSecrets(plan.env, (resolvedEnv) => doSpawn(resolvedEnv), caller.moduleId);
+        }
       } catch (err) {
         if (child) killTree(child);
         throw fail(new ScriptRefusedError("secrets-refused", deps.redact(errorMessage(err))));

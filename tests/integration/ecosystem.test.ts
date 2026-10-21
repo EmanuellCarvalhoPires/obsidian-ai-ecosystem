@@ -124,7 +124,14 @@ describe("AI Ecosystem wiring", () => {
     const init = await rpc(r, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } });
     expect(init.result.serverInfo).toMatchObject({ name: "ai-ecosystem", version: "1.0.0" });
     expect(init.result.instructions).toContain("ecosystem_status");
-    expect(await toolNames(r)).toEqual(["ecosystem_status", "ecosystem_list_scripts", "ecosystem_run_script"]);
+    expect(await toolNames(r)).toEqual([
+      "ecosystem_status",
+      "ecosystem_list_scripts",
+      "ecosystem_run_script",
+      "ecosystem_setup_status",
+      "ecosystem_setup_save",
+      "ecosystem_setup_complete",
+    ]);
   });
 
   it("registers a module through the public API: tools, list_changed, REST, legacy alias, status", async () => {
