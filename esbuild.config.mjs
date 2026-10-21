@@ -59,6 +59,8 @@ const context = await esbuild.context({
     "@lezer/lr",
     ...builtinModules,
     ...builtinModules.map((m) => `node:${m}`),
+    // Only Node 24 lists this prefix-only module in builtinModules; Node 22 (CI) does not.
+    "node:sqlite",
   ],
   format: "cjs",
   target: "es2022",
