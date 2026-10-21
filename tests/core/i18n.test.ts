@@ -35,7 +35,7 @@ describe("i18n tables", () => {
   });
 
   it("keeps keys under the area prefixes", () => {
-    const prefixes = ["core.", "server.", "runner.", "inspector.", "catalog.", "settings."];
+    const prefixes = ["core.", "server.", "runner.", "inspector.", "catalog.", "settings.", "screens."];
     for (const key of Object.keys(en)) {
       expect(prefixes.some((p) => key.startsWith(p)), key).toBe(true);
     }

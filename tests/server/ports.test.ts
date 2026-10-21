@@ -1,3 +1,4 @@
+import * as net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyHealth,
@@ -7,7 +8,7 @@ import {
   parseTasklistName,
   probePortOwner,
 } from "../../src/server/port-owner";
-import { ServerHost } from "../../src/server/server-host";
+import { LISTEN_HOST, PORT_SCAN_ATTEMPTS, ServerHost, scanPorts } from "../../src/server/server-host";
 import type { ServerStatus } from "../../src/types";
 import { FakeActivity, FakeRegistry, dummyServer } from "./helpers";
 
@@ -171,17 +172,6 @@ describe("ServerHost port conflicts", () => {
     expect(status.conflict?.owner).toBe("environment-keys-transition");
   });
 
-  it("reports an error when the alternative port is busy too", async () => {
-    const owner = await ekV1();
-    const second = track(await dummyServer((_req, res) => res.end("x")));
-    const host = makeHost(owner.port, second.port);
-    const status = await host.start();
-    expect(status.running).toBe(false);
-    expect(status.port).toBe(owner.port);
-    expect(status.error).toContain(String(second.port));
-    expect(status.conflict?.owner).toBe("environment-keys-1");
-  });
-
   it("uses an injected probe and treats a probe failure as unknown", async () => {
     const owner = track(await dummyServer((_req, res) => res.end("x")));
     const probed: number[] = [];
@@ -195,5 +185,140 @@ describe("ServerHost port conflicts", () => {
     expect(probed).toEqual([owner.port]);
     expect(status.conflict).toEqual({ port: owner.port, owner: "unknown" });
     expect(status.usingAlternativePort).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Automatic port search
+// ---------------------------------------------------------------------------
+
+/** Holds a port with a plain TCP listener (busy for the host, no HTTP answer). */
+function occupy(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Drops every connection at once, so the owner probe does not wait.
+    const server = net.createServer((socket) => socket.destroy());
+    server.once("error", reject);
+    server.listen(port, LISTEN_HOST, () => {
+      cleanup.push(() => new Promise<void>((done) => server.close(() => done())));
+      resolve();
+    });
+  });
+}
+
+/** Finds `count` free consecutive ports (high range, random base) and returns the first. */
+async function freeBlock(count: number): Promise<number> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const base = 30000 + Math.floor(Math.random() * 25000);
+    const probes: net.Server[] = [];
+    let ok = true;
+    for (let i = 0; i < count && ok; i++) {
+      const server = net.createServer();
+      ok = await new Promise<boolean>((resolve) => {
+        server.once("error", () => resolve(false));
+        server.listen(base + i, LISTEN_HOST, () => resolve(true));
+      });
+      if (ok) probes.push(server);
+    }
+    await Promise.all(probes.map((s) => new Promise<void>((done) => s.close(() => done()))));
+    if (ok) return base;
+  }
+  throw new Error("no free port block found");
+}
+
+describe("ServerHost automatic port search", () => {
+  it("scanPorts walks upwards from the alternative port, skipping the main port and stopping at 65535", () => {
+    expect(scanPorts(27150, 27160)).toEqual(Array.from({ length: PORT_SCAN_ATTEMPTS }, (_, i) => 27160 + i));
+    expect(scanPorts(27162, 27160).slice(0, 4)).toEqual([27160, 27161, 27163, 27164]);
+    expect(scanPorts(27162, 27160)).toHaveLength(PORT_SCAN_ATTEMPTS);
+    expect(scanPorts(27150, 65533)).toEqual([65533, 65534, 65535]);
+    expect(scanPorts(27150, 0)).toEqual([0]);
+  });
+
+  it("uses the alternative port when the main port is busy", async () => {
+    const base = await freeBlock(2);
+    await occupy(base);
+    const status = await makeHost(base, base + 1).start();
+    expect(status).toMatchObject({ running: true, port: base + 1, usingAlternativePort: true, configuredPort: base });
+    expect(status.conflict).toMatchObject({ port: base, owner: "unknown" });
+    expect(status.previousPort).toBeUndefined();
+  });
+
+  it("uses the next consecutive port when the main and the alternative ports are busy", async () => {
+    const base = await freeBlock(3);
+    await occupy(base);
+    await occupy(base + 1);
+    const status = await makeHost(base, base + 1).start();
+    expect(status).toMatchObject({ running: true, port: base + 2, usingAlternativePort: true });
+    expect((await fetch(`http://127.0.0.1:${status.port}/health`)).status).toBe(200);
+  });
+
+  it("skips many busy ports, up to the limit, and takes the next free one", async () => {
+    const base = await freeBlock(PORT_SCAN_ATTEMPTS + 1);
+    // main = base, alternative = base + 1; busy: base .. base + 19 (the main port and 19 scanned ports); the 20th scanned is free.
+    for (let i = 0; i < PORT_SCAN_ATTEMPTS; i++) await occupy(base + i);
+    const probed: number[] = [];
+    const status = await makeHost(base, base + 1, {
+      probe: async (port: number) => {
+        probed.push(port);
+        return { port, owner: "other" as const };
+      },
+    }).start();
+    expect(status).toMatchObject({ running: true, port: base + PORT_SCAN_ATTEMPTS, usingAlternativePort: true });
+    // Only the main port is probed, to keep start-up fast.
+    expect(probed).toEqual([base]);
+  });
+
+  it("fails with the range tried when every port of the scan is busy", async () => {
+    const base = await freeBlock(PORT_SCAN_ATTEMPTS + 1);
+    for (let i = 0; i < PORT_SCAN_ATTEMPTS + 1; i++) await occupy(base + i);
+    const status = await makeHost(base, base + 1, { probe: async (port: number) => ({ port, owner: "environment-keys-1" as const }) }).start();
+    expect(status.running).toBe(false);
+    expect(status.usingAlternativePort).toBe(false);
+    expect(status.port).toBe(base);
+    expect(status.error).toContain(`${base + 1}-${base + PORT_SCAN_ATTEMPTS}`);
+    expect(status.conflict).toMatchObject({ port: base, owner: "environment-keys-1" });
+  });
+
+  it("tries lastPort first, even when the main port is free, and reports the port it kept", async () => {
+    const base = await freeBlock(4);
+    const status = await makeHost(base, base + 1, { lastPort: base + 3 }).start();
+    expect(status).toMatchObject({ running: true, port: base + 3, usingAlternativePort: true, configuredPort: base });
+    expect(status.conflict).toBeUndefined();
+    expect(status.previousPort).toBeUndefined();
+  });
+
+  it("skips lastPort when it is busy and tells the clients that the port changed", async () => {
+    const base = await freeBlock(4);
+    await occupy(base + 3);
+    const status = await makeHost(base, base + 1, { lastPort: base + 3 }).start();
+    expect(status).toMatchObject({ running: true, port: base, usingAlternativePort: false, previousPort: base + 3 });
+  });
+
+  it("ignores a lastPort equal to the main port", async () => {
+    const base = await freeBlock(2);
+    const status = await makeHost(base, base + 1, { lastPort: base }).start();
+    expect(status).toMatchObject({ running: true, port: base, usingAlternativePort: false });
+    expect(status.previousPort).toBeUndefined();
+  });
+
+  it("does not fail on a refused port (EACCES), and fails on any other listen error", async () => {
+    const base = await freeBlock(2);
+    const proto = ServerHost.prototype as unknown as { listen: (port: number) => Promise<unknown> };
+    const original = proto.listen;
+    const calls: number[] = [];
+    proto.listen = function (this: ServerHost, port: number) {
+      calls.push(port);
+      if (port === base) return Promise.resolve({ ok: false, error: Object.assign(new Error("denied"), { code: "EACCES" }) });
+      if (port === base + 1) return Promise.resolve({ ok: false, error: Object.assign(new Error("boom"), { code: "EINVAL" }) });
+      return original.call(this, port);
+    };
+    try {
+      const status = await makeHost(base, base + 1, { probe: async (port: number) => ({ port, owner: "unknown" as const }) }).start();
+      expect(calls).toEqual([base, base + 1]);
+      expect(status.running).toBe(false);
+      expect(status.error).toContain(`Could not listen on port ${base + 1}: boom`);
+    } finally {
+      proto.listen = original;
+    }
   });
 });

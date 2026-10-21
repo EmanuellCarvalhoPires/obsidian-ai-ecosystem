@@ -26,6 +26,7 @@ describe("normalizeSettings", () => {
     expect(s.alternativePort).toBe(27160);
     expect(s.scripts).toEqual({ allowedFolders: ["Scripts"], restrictionsDisabled: false, maxTimeoutSeconds: 300, interpreterPaths: {} });
     expect(s.inspector.maxEntries).toBe(500);
+    expect(s.screens.maxScreens).toBe(30);
   });
 
   it("accepts valid data unchanged", () => {
@@ -51,6 +52,7 @@ describe("normalizeSettings", () => {
         interpreterPaths: { python: "C:/Python/python.exe", node: "node" },
       },
       inspector: { maxEntries: 1000 },
+      screens: { maxScreens: 12 },
     };
     expect(normalizeSettings(valid)).toEqual(valid);
   });
@@ -71,6 +73,15 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ port: 27160 })).toMatchObject({ port: 27160, alternativePort: 27161 });
     expect(normalizeSettings({ port: 65535, alternativePort: 65535 }).alternativePort).toBe(27160);
     expect(normalizeSettings({ alternativePort: 12 }).alternativePort).toBe(27160);
+  });
+
+  it("keeps lastPort only when it is a valid port", () => {
+    expect("lastPort" in normalizeSettings(undefined)).toBe(false);
+    expect(normalizeSettings({ lastPort: 27163 }).lastPort).toBe(27163);
+    expect(normalizeSettings({ lastPort: 80 }).lastPort).toBeUndefined();
+    expect(normalizeSettings({ lastPort: 70000 }).lastPort).toBeUndefined();
+    expect(normalizeSettings({ lastPort: 27163.5 }).lastPort).toBeUndefined();
+    expect(normalizeSettings({ lastPort: "27163" }).lastPort).toBeUndefined();
   });
 
   it("keeps only clients with valid fields and drops duplicates", () => {
@@ -113,6 +124,14 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ inspector: { maxEntries: "x" } }).inspector.maxEntries).toBe(500);
   });
 
+  it("clamps the screen limit to 1..200 and defaults to 30", () => {
+    expect(normalizeSettings({ screens: { maxScreens: 0 } }).screens.maxScreens).toBe(1);
+    expect(normalizeSettings({ screens: { maxScreens: 9999 } }).screens.maxScreens).toBe(200);
+    expect(normalizeSettings({ screens: { maxScreens: "x" } }).screens.maxScreens).toBe(30);
+    expect(normalizeSettings({ screens: "x" }).screens.maxScreens).toBe(30);
+    expect(normalizeSettings({ screens: { maxScreens: 45 } }).screens.maxScreens).toBe(45);
+  });
+
   it("keeps only known interpreter languages with non-empty paths, and only true for restrictionsDisabled", () => {
     const s = normalizeSettings({
       scripts: { restrictionsDisabled: "yes", interpreterPaths: { python: " /usr/bin/python3 ", node: "", ruby: "ruby", bash: 5 } },
@@ -137,6 +156,24 @@ describe("normalizeFolder", () => {
   });
 });
 
+describe("lastPort and the port settings", () => {
+  it("is cleared when the port or the alternative port changes, so an explicit choice wins", () => {
+    const s = normalizeSettings({ lastPort: 27163 });
+    expect(writeSetting(s, "port", 28000)).toEqual(["restart-server"]);
+    expect(s.lastPort).toBeUndefined();
+
+    s.lastPort = 27163;
+    expect(writeSetting(s, "alternativePort", 28005)).toEqual(["restart-server"]);
+    expect(s.lastPort).toBeUndefined();
+
+    // An ignored change keeps it.
+    s.lastPort = 27163;
+    expect(writeSetting(s, "port", 80)).toEqual([]);
+    expect(writeSetting(s, "port", s.port)).toEqual([]);
+    expect(s.lastPort).toBe(27163);
+  });
+});
+
 describe("readSetting / writeSetting", () => {
   it("reads and writes control values and reports the effects", () => {
     const s = normalizeSettings(undefined);
@@ -152,6 +189,8 @@ describe("readSetting / writeSetting", () => {
     expect(s.scripts.maxTimeoutSeconds).toBe(3600);
     expect(writeSetting(s, "inspector.maxEntries", 100)).toEqual([]);
     expect(readSetting(s, "inspector.maxEntries")).toBe(100);
+    expect(writeSetting(s, "screens.maxScreens", 500)).toEqual([]);
+    expect(readSetting(s, "screens.maxScreens")).toBe(200);
   });
 
   it("sets and clears interpreter paths", () => {

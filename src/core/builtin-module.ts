@@ -4,6 +4,10 @@ import { AI_ECOSYSTEM_API_VERSION, ECOSYSTEM_ID } from "../types";
 import type { HubModuleRegistration, HubRoute, HubTool, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
 import { createScriptRoutes, createScriptTools } from "../runner/script-tools";
 import type { ScriptToolsDeps } from "../runner/script-tools";
+import type { ScreenService } from "../screens/service";
+import { createScreenTools } from "../screens/tools";
+import type { SetupManager } from "../setup/setup-manager";
+import { createSetupTools } from "../setup/setup-tools";
 
 export const BASE_MCP_INSTRUCTIONS =
   "This is the AI Ecosystem server of an Obsidian vault. " +
@@ -16,6 +20,10 @@ export interface BuiltinModuleDeps {
   listModules: () => ModuleInfo[];
   listServices: () => ServiceInfo[];
   scripts: ScriptToolsDeps;
+  /** The saved screens. Their tools (tela_criar... and tela_<slug>) are part of this module. */
+  screens?: ScreenService;
+  /** The guided setup. Its tools (ecosystem_setup_*) are part of this module and never hidden. */
+  setup?: SetupManager;
 }
 
 export interface EcosystemStatus {
@@ -41,7 +49,7 @@ export function formatStatusText(status: EcosystemStatus): string {
   const lines = [
     `AI Ecosystem ${status.version} (Provider API ${status.apiVersion}).`,
     server.running
-      ? `Server: running on 127.0.0.1:${server.port}${server.usingAlternativePort ? " (alternative port)" : ""}.`
+      ? `Server: running on 127.0.0.1:${server.port}${server.usingAlternativePort ? " (not the configured port)" : ""}.`
       : `Server: stopped${server.error ? ` (${server.error})` : ""}.`,
     "Modules:",
   ];
@@ -54,7 +62,11 @@ export function formatStatusText(status: EcosystemStatus): string {
   return lines.join("\n");
 }
 
-export function createBuiltinModule(deps: BuiltinModuleDeps): HubModuleRegistration {
+/**
+ * The tools of the module: the static ones plus the screen tools. The screen tools change while
+ * the plugin runs, so the registry is given this list again (updateTools) whenever they do.
+ */
+export function createBuiltinTools(deps: BuiltinModuleDeps): HubTool[] {
   const statusTool: HubTool = {
     name: "ecosystem_status",
     title: "AI Ecosystem status",
@@ -69,7 +81,15 @@ export function createBuiltinModule(deps: BuiltinModuleDeps): HubModuleRegistrat
       });
     },
   };
+  return [
+    statusTool,
+    ...createScriptTools(deps.scripts),
+    ...(deps.setup ? createSetupTools(deps.setup) : []),
+    ...(deps.screens ? createScreenTools(deps.screens) : []),
+  ];
+}
 
+export function createBuiltinModule(deps: BuiltinModuleDeps): HubModuleRegistration {
   const statusRoute: HubRoute = {
     method: "GET",
     path: "/status",
@@ -83,6 +103,6 @@ export function createBuiltinModule(deps: BuiltinModuleDeps): HubModuleRegistrat
     version: deps.version,
     apiVersion: AI_ECOSYSTEM_API_VERSION,
     routes: [statusRoute, ...createScriptRoutes(deps.scripts)],
-    tools: [statusTool, ...createScriptTools(deps.scripts)],
+    tools: createBuiltinTools(deps),
   };
 }

@@ -4,6 +4,7 @@ import { ECOSYSTEM_ID } from "../types";
 import type { ActivitySink, ClientContext, PortConflict, RegistryLookup, ServerStatus } from "../types";
 import { errorBody, flattenHeaders, parseQuery, readBody, sendError, sendJson, splitUrl, withoutAuthorization } from "./http-utils";
 import { McpHost } from "./mcp-host";
+import type { McpHostOptions } from "./mcp-host";
 import { probePortOwner } from "./port-owner";
 import { handleRestRequest, sendOutcome } from "./router";
 
@@ -13,10 +14,16 @@ export const LISTEN_HOST = "127.0.0.1";
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_TRANSITION_WAIT_MS = 10_000;
 const RETRY_WAITS_MS = [250, 500, 1000, 2000, 3000];
+const MAX_PORT = 65535;
+
+/** How many ports are tried after the main one (the alternative port first, then the next ones one by one). */
+export const PORT_SCAN_ATTEMPTS = 20;
 
 export interface ServerHostOptions {
   port: number;
   alternativePort: number;
+  /** Port this vault actually used last time. Tried first, so MCP clients keep working. */
+  lastPort?: number;
   registry: RegistryLookup;
   auth: { authenticate(authorizationHeader: string | undefined): ClientContext | undefined };
   activity: ActivitySink;
@@ -25,6 +32,10 @@ export interface ServerHostOptions {
   vaultName?: string;
   /** Base text of the MCP instructions (module instructions are appended). */
   getMcpInstructions: () => string;
+  /** Hides tools from some clients (see McpHostOptions). */
+  isToolHidden?: McpHostOptions["isToolHidden"];
+  /** Told about every MCP tool call result (see McpHostOptions). */
+  onToolResult?: McpHostOptions["onToolResult"];
   onStatusChange?: (status: ServerStatus) => void;
   /** Default 10 MB. */
   maxBodyBytes?: number;
@@ -32,6 +43,22 @@ export interface ServerHostOptions {
   transitionWaitMs?: number;
   /** Who holds a busy port. Default probePortOwner; injectable for tests. */
   probe?: (port: number) => Promise<PortConflict>;
+}
+
+/** The ports tried after the main one: the alternative port, then the next ones, never the main port or above 65535. */
+export function scanPorts(mainPort: number, alternativePort: number): number[] {
+  // Port 0 asks the system for a free port: there is no range to walk.
+  if (alternativePort === 0) return [0];
+  const ports: number[] = [];
+  for (let port = alternativePort; port <= MAX_PORT && ports.length < PORT_SCAN_ATTEMPTS; port++) {
+    if (port !== mainPort) ports.push(port);
+  }
+  return ports;
+}
+
+/** Busy (EADDRINUSE) or refused (EACCES, e.g. a reserved range on Windows): try another port. */
+function isPortTaken(error: NodeJS.ErrnoException): boolean {
+  return error.code === "EADDRINUSE" || error.code === "EACCES";
 }
 
 type ListenResult = { ok: true; server: http.Server; port: number } | { ok: false; error: NodeJS.ErrnoException };
@@ -115,10 +142,17 @@ export class ServerHost {
     const opts = this.opts;
     this.setStatus(this.idleStatus());
 
+    // The port this vault used last time comes first, so its MCP clients keep working.
+    const lastPort = opts.lastPort !== undefined && opts.lastPort !== opts.port ? opts.lastPort : undefined;
+    if (lastPort !== undefined) {
+      const remembered = await this.listen(lastPort);
+      if (remembered.ok) return this.running(remembered, undefined);
+    }
+
     const main = await this.listen(opts.port);
     if (main.ok) return this.running(main, undefined);
 
-    if (main.error.code !== "EADDRINUSE") {
+    if (!isPortTaken(main.error)) {
       return this.failed(opts.port, `Could not listen on port ${opts.port}: ${main.error.message}`);
     }
 
@@ -136,12 +170,25 @@ export class ServerHost {
       if (retried?.ok) return this.running(retried, undefined);
     }
 
-    const altPort = opts.alternativePort;
-    const alt = altPort === opts.port && altPort !== 0 ? undefined : await this.listen(altPort);
-    if (alt?.ok) return this.running(alt, conflict, true);
+    // Busy or refused ports are skipped; the first free one wins. Only the main port is probed (fast start-up).
+    const candidates = scanPorts(opts.port, opts.alternativePort);
+    for (const port of candidates) {
+      if (port === lastPort) continue; // already tried
+      const result = await this.listen(port);
+      if (result.ok) return this.running(result, conflict);
+      if (!isPortTaken(result.error)) {
+        return this.failed(opts.port, `Could not listen on port ${port}: ${result.error.message}`, conflict);
+      }
+    }
 
-    const reason = alt ? alt.error.message : "it is the same port";
-    return this.failed(opts.port, `Port ${opts.port} is in use and the alternative port ${altPort} is not available (${reason}).`, conflict);
+    const range = candidates.length > 0 ? `${candidates[0]}-${candidates[candidates.length - 1]}` : "none";
+    return this.failed(
+      opts.port,
+      candidates.length > 0
+        ? `Port ${opts.port} is in use and no free port was found in ${range}. Free a port or change the port in the settings.`
+        : `Port ${opts.port} is in use and there is no other port to try. Change the port in the settings.`,
+      conflict,
+    );
   }
 
   private async retryMainPort(port: number, totalMs: number): Promise<ListenResult | undefined> {
@@ -157,7 +204,7 @@ export class ServerHost {
     }
   }
 
-  private running(result: Extract<ListenResult, { ok: true }>, conflict: PortConflict | undefined, alternative = false): ServerStatus {
+  private running(result: Extract<ListenResult, { ok: true }>, conflict: PortConflict | undefined): ServerStatus {
     this.server = result.server;
     this.boundPort = result.port;
     const opts = this.opts;
@@ -166,8 +213,14 @@ export class ServerHost {
       activity: opts.activity,
       serverInfo: { name: ECOSYSTEM_ID, title: "AI Ecosystem (Obsidian)", version: opts.version },
       getBaseInstructions: opts.getMcpInstructions,
+      isToolHidden: opts.isToolHidden,
+      onToolResult: opts.onToolResult,
     });
+    // An ephemeral configured port (0) has no "other" port to compare with.
+    const alternative = opts.port !== 0 && result.port !== opts.port;
     const status: ServerStatus = { running: true, port: result.port, usingAlternativePort: alternative };
+    if (alternative) status.configuredPort = opts.port;
+    if (opts.lastPort !== undefined && opts.lastPort !== result.port) status.previousPort = opts.lastPort;
     if (conflict) status.conflict = conflict;
     this.setStatus(status);
     return this.getStatus();

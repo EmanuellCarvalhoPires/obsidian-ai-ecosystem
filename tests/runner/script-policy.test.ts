@@ -239,8 +239,13 @@ describe("validateRun: secrets", () => {
     expect(r).toEqual({
       ok: false,
       code: "secrets-unavailable",
-      reason: "Environment variables with {{secret:...}} placeholders need the Environment Keys plugin.",
+      reason: "Environment variables and arguments with {{secret:...}} placeholders need the Environment Keys plugin.",
     });
+  });
+
+  it("also needs the Environment Keys plugin for placeholders in args", () => {
+    const r = validateRun(opts({ args: ["{{secret:A}}"] }), caller, ctx({ secretsAvailable: false }));
+    expect(r).toMatchObject({ ok: false, code: "secrets-unavailable" });
   });
 
   it("refuses while the vault is locked", () => {
