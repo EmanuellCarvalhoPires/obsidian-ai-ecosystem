@@ -93,6 +93,49 @@ const GUIDES: ModuleGuide[] = [
     },
   },
   {
+    id: "ai-log-manager",
+    rows: [
+      {
+        task: { pt: "Ver ou atualizar o log da conversa, ligar um log a um projeto", en: "See or update the conversation log, link a log to a project" },
+        plugin: "AI Log Manager",
+        tools: ["logs_status", "logs_update", "logs_create", "logs_link_project", "logs_rename", "logs_sync_all"],
+      },
+      {
+        task: { pt: "Registrar eventos de desenvolvimento, gerar changelog ou o grafo do repositório", en: "Record development events, build a changelog or the repository graph" },
+        plugin: "AI Log Manager",
+        tools: ["dev_sync", "dev_record_event", "dev_changelog", "dev_graph"],
+      },
+    ],
+    advice: {
+      pt: "O log da conversa é criado e atualizado pelo plugin: não monte uma nota de log à mão. Use `logs_status` para ver o estado e `logs_create` só para escolher o título.",
+      en: "The conversation log is created and updated by the plugin: do not build a log note by hand. Use `logs_status` to see the state and `logs_create` only to choose the title.",
+    },
+  },
+  {
+    id: "ai-git-tools",
+    rows: [
+      {
+        task: { pt: "Commit, push, branch, merge, stash e tag", en: "Commit, push, branch, merge, stash and tag" },
+        plugin: "AI Git Tools",
+        tools: ["git_status", "git_diff", "git_log", "git_add", "git_commit", "git_push", "git_pull", "git_checkout", "git_merge", "git_stash", "git_tag"],
+      },
+      {
+        task: { pt: "Abrir, listar, comentar e mesclar PR; ver pipeline", en: "Open, list, comment on and merge a PR; see the pipeline" },
+        plugin: "AI Git Tools",
+        tools: ["git_pr_criar", "git_pr_listar", "git_pr_obter", "git_pr_comentar", "git_pr_merge", "git_pipeline_status"],
+      },
+      {
+        task: { pt: "Grafo, changelog e eventos de projeto", en: "Graph, changelog and project events" },
+        plugin: "AI Git Tools",
+        tools: ["git_graph", "git_changelog", "git_sync", "git_registrar_evento"],
+      },
+    ],
+    advice: {
+      pt: "Para git e para as APIs do GitHub e do Bitbucket, use as tools do AI Git Tools (`git_status`, `git_commit`, `git_push`, `git_pr_criar`...) em vez de `git`, `gh`, `curl` ou `Invoke-RestMethod` no terminal. Elas documentam o histórico do projeto sozinhas. `git_pr_merge` sempre pede a aprovação do usuário.",
+      en: "For git and for the GitHub and Bitbucket APIs, use the AI Git Tools tools (`git_status`, `git_commit`, `git_push`, `git_pr_criar`...) instead of `git`, `gh`, `curl` or `Invoke-RestMethod` in the terminal. They record the project history by themselves. `git_pr_merge` always asks for the user's approval.",
+    },
+  },
+  {
     id: "environment-variables",
     rows: [
       {

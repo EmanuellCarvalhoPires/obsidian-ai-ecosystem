@@ -8,7 +8,7 @@ import { clearTimeout, setTimeout } from "node:timers";
 import type { HookActionResult, HookInstallPlan, HookManager, HookManagerListener } from "../hooks/hook-manager";
 import { NODE_MISSING } from "../hooks/hook-manager";
 import { SETUP_EVENTS, buildCommand, protectionModuleIds, protectionSpec } from "../hooks/hook-specs";
-import { SETTINGS_FILES, writeFileAtomic } from "../hooks/state-dir";
+import { SETTINGS_FILES, defaultMode, writeFileAtomic } from "../hooks/state-dir";
 import type { HookMode } from "../hooks/state-dir";
 import type { Lang } from "../i18n";
 import { normalizeFolder } from "../settings/settings-store";
@@ -465,7 +465,8 @@ export class SetupManager implements HookManagerListener {
     if (typeof value !== "string" || !HOOK_MODES.includes(value)) return `modo_hooks must be one of: ${HOOK_MODES.join(", ")}.`;
     const mode = value as HookMode;
     if (moduleId === ECOSYSTEM_ID) {
-      for (const id of protectionModuleIds()) this.hooks.setMode(id, mode);
+      // Modules with their own default (AI Git Tools: avisar) keep it until they answer modo_hooks themselves.
+      for (const id of protectionModuleIds()) if (defaultMode(id) === "bloquear") this.hooks.setMode(id, mode);
     } else if (protectionSpec(moduleId)) {
       this.hooks.setMode(moduleId, mode);
     }
@@ -603,7 +604,9 @@ export class SetupManager implements HookManagerListener {
     if (!protectionSpec(moduleId)) return "nenhum";
     const coreMode = this.states.get(ECOSYSTEM_ID)?.respostas.modo_hooks;
     const explicit = this.hooks.state.readConfig()?.modos[moduleId];
-    if (!explicit && typeof coreMode === "string" && HOOK_MODES.includes(coreMode)) this.hooks.setMode(moduleId, coreMode as HookMode);
+    // The mode of the core round never reaches a module with its own default (it keeps that default).
+    const followsCore = defaultMode(moduleId) === "bloquear";
+    if (!explicit && followsCore && typeof coreMode === "string" && HOOK_MODES.includes(coreMode)) this.hooks.setMode(moduleId, coreMode as HookMode);
     const result: HookActionResult = await this.hooks.installProtection(moduleId);
     if (result.ok) return "instalados";
     return result.error === NODE_MISSING ? "node_ausente" : `erro: ${result.error}`;

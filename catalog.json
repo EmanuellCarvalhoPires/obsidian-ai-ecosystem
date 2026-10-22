@@ -55,6 +55,28 @@
       },
       "icon": "search",
       "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "ai-log-manager",
+      "repo": "EmanuellCarvalhoPires/obsidian-ai-log-manager",
+      "name": "AI Log Manager",
+      "description": {
+        "en": "Creates and keeps the conversation logs of AI agents in your vault by itself, shows them on a screen of their own and records development events with the repository graph.",
+        "pt": "Cria e mantém sozinho os logs das conversas de agentes de IA no cofre, mostra-os numa tela própria e registra eventos de desenvolvimento com o grafo do repositório."
+      },
+      "icon": "scroll-text",
+      "minEcosystemVersion": "1.0.0"
+    },
+    {
+      "id": "ai-git-tools",
+      "repo": "EmanuellCarvalhoPires/obsidian-ai-git-tools",
+      "name": "AI Git Tools",
+      "description": {
+        "en": "Local git, GitHub and Bitbucket pull requests and pipelines for AI agents, with the history of each project documented in notes. Merging a pull request always asks for your approval.",
+        "pt": "Git local, pull requests e pipelines do GitHub e do Bitbucket para agentes de IA, com o histórico de cada projeto documentado em notas. Mesclar um pull request sempre pede a sua aprovação."
+      },
+      "icon": "git-branch",
+      "minEcosystemVersion": "1.3.0"
     }
   ]
 }

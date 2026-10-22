@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CORE_FAILURE_SPEC, buildCommand, parseCommand, protectionSpec, setupSpecs } from "../../src/hooks/hook-specs";
+import { APPROVAL_SPEC, CORE_FAILURE_SPEC, approvalSpecs, buildCommand, moduleHookSpecs, parseCommand, protectionSpec, setupSpecs } from "../../src/hooks/hook-specs";
 import { SettingsMerger } from "../../src/hooks/settings-merger";
 import { makeVault, removeVault } from "../runner/helpers";
 
@@ -77,6 +77,54 @@ describe("hook commands", () => {
       { module: "ai-templates", type: "setup", event: "UserPromptSubmit" },
     ]);
     expect(protectionSpec("telegram-ai-gateway")).toBeUndefined();
+  });
+});
+
+describe("AI Git Tools entries", () => {
+  const GIT = protectionSpec("ai-git-tools")!;
+
+  it("has the protection and approval specs of the contract", () => {
+    expect(GIT).toEqual({ module: "ai-git-tools", type: "protecao", event: "PreToolUse", matcher: "Bash|PowerShell" });
+    expect(APPROVAL_SPEC).toEqual({ module: "ai-git-tools", type: "aprovacao", event: "PreToolUse", matcher: "mcp__.*__git_pr_merge" });
+    expect(approvalSpecs("ai-git-tools")).toEqual([APPROVAL_SPEC]);
+    expect(approvalSpecs("ai-scripts")).toEqual([]);
+    expect(moduleHookSpecs("ai-git-tools")).toEqual([GIT, APPROVAL_SPEC]);
+    expect(moduleHookSpecs("ai-scripts")).toEqual([SCRIPTS]);
+    expect(moduleHookSpecs("telegram-ai-gateway")).toEqual([]);
+    expect(parseCommand(buildCommand("/v", "ai-git-tools", "aprovacao"))).toEqual({ module: "ai-git-tools", type: "aprovacao" });
+  });
+
+  it("installs both entries idempotently, next to the user's own PreToolUse hooks", () => {
+    const user = { matcher: "Bash", hooks: [{ type: "command", command: "my-linter.sh", timeout: 5 }] };
+    writeSettings({ hooks: { PreToolUse: [user] } });
+    expect(merger.install(LOCAL, [GIT, APPROVAL_SPEC])).toEqual({ ok: true, changed: true });
+    const first = fs.readFileSync(file(), "utf8");
+    expect(merger.install(LOCAL, [GIT, APPROVAL_SPEC])).toEqual({ ok: true, changed: false });
+    expect(fs.readFileSync(file(), "utf8")).toBe(first);
+
+    const pre = readSettings().hooks.PreToolUse;
+    expect(pre).toEqual([
+      user,
+      { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: buildCommand(vaultPath, "ai-git-tools", "protecao"), timeout: 10 }] },
+      { matcher: "mcp__.*__git_pr_merge", hooks: [{ type: "command", command: buildCommand(vaultPath, "ai-git-tools", "aprovacao"), timeout: 10 }] },
+    ]);
+    const listed = merger.list(LOCAL);
+    expect(listed.ok && listed.entries.map((e) => e.type)).toEqual(["protecao", "aprovacao"]);
+  });
+
+  it("removes both with the module and keeps the user's entries", () => {
+    const user = { matcher: "Bash", hooks: [{ type: "command", command: "my-linter.sh" }] };
+    writeSettings({ hooks: { PreToolUse: [user] } });
+    merger.install(LOCAL, [GIT, APPROVAL_SPEC]);
+    expect(merger.remove(LOCAL, { module: "ai-git-tools" })).toEqual({ ok: true, changed: true });
+    expect(readSettings().hooks.PreToolUse).toEqual([user]);
+  });
+
+  it("moves the approval entry with the others", () => {
+    merger.install(LOCAL, [GIT, APPROVAL_SPEC]);
+    expect(merger.move(LOCAL, SHARED).ok).toBe(true);
+    const moved = merger.list(SHARED);
+    expect(moved.ok && moved.entries.map((e) => `${e.type}:${e.matcher}`)).toEqual(["protecao:Bash|PowerShell", "aprovacao:mcp__.*__git_pr_merge"]);
   });
 });
 

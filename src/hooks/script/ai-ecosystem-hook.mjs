@@ -2,11 +2,16 @@
 //
 // Written by the AI Ecosystem plugin to <vault>/.claude/ai-ecosystem/hooks/ and registered
 // in the Claude Code settings. Types: protecao (PreToolUse), setup (SessionStart, UserPromptSubmit), falha
-// (PostToolUseFailure). Plain Node, no dependencies, no network.
+// (PostToolUseFailure), aprovacao (PreToolUse of git_pr_merge). Plain Node, no dependencies, no network.
 //
 // This script must never get in the way of the agent: any problem (missing or invalid state
 // file, unexpected input, exception, more than 2 seconds) ends with exit code 0 and no
-// output, which lets the tool call proceed.
+// output, which lets the tool call proceed. The one exception is the type aprovacao: it never
+// fails open, any problem there still makes Claude Code ask the user.
+//
+// The script never answers permissionDecision "allow": that would approve the call and skip the
+// normal Claude Code permission prompt. A reminder (mode avisar, repetition lock) goes out as
+// additionalContext only, so the call follows the user's usual permission rules.
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -17,6 +22,11 @@ const FAILURE_TTL_MS = 10 * 60_000;
 const LOCK_WINDOW_MS = 10 * 60_000;
 const LOCK_PASS_ATTEMPT = 3;
 const WINDOWS = process.platform === "win32";
+const APPROVAL = process.argv[3] === "aprovacao";
+const GENERIC_APPROVAL = "Posso fazer o merge deste PR?";
+
+/** Mode of a module with no entry in config.modos (same table as defaultMode in state-dir.ts). */
+const DEFAULT_MODES = { "ai-git-tools": "avisar" };
 
 const MESSAGES = {
   "ai-vault-search":
@@ -26,22 +36,32 @@ const MESSAGES = {
   "ai-scripts":
     "Este script está numa pasta permitida: rode com ecosystem_run_script (ou run_ai_script se estiver registrado no AI Scripts).",
   "ai-templates": "Já existe molde para esta nota: use create_note_from_template (AI Templates).",
+  "ai-git-tools":
+    "Para git e para as APIs de GitHub e Bitbucket use as tools do AI Git Tools (git_status, git_commit, git_push, git_pr_criar...).",
 };
 
 const HTTP_COMMANDS = ["curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr"];
 const SCRIPT_RUNNERS = ["python", "python3", "py", "node", "pwsh", "powershell", "bash", "sh"];
+const GIT_COMMANDS = ["git", "gh"];
+const GIT_HELP_WORDS = ["--version", "version", "help", "-h", "--help"];
+const GIT_HOSTS = ["api.github.com", "github.com", "api.bitbucket.org", "bitbucket.org"];
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-/** Ends the process without output (the call proceeds). */
+/** Ends the process without output (the call proceeds). For aprovacao it asks the user instead. */
 function allow() {
+  if (APPROVAL) return askApproval(GENERIC_APPROVAL);
   process.exit(0);
 }
 
+let answered = false;
+
 /** Prints one JSON line and ends. Falls back to exit 0 if the write fails. */
 function respond(output) {
+  if (answered) return;
+  answered = true;
   const text = JSON.stringify(output) + "\n";
   try {
     process.stdout.write(text, () => process.exit(0));
@@ -68,6 +88,7 @@ function main() {
       if (type === "protecao") return protect(stateDir, moduleId, input);
       if (type === "setup") return setup(stateDir, moduleId, input);
       if (type === "falha") return failure(stateDir, input);
+      if (type === "aprovacao") return approval(input);
     } catch {
       // Fail open.
     }
@@ -174,7 +195,7 @@ function protect(stateDir, moduleId, input) {
   const message = matchRule(moduleId, toolName, toolInput, env);
   if (!message) return allow();
 
-  if (mode === "avisar") return respond(allowWith(message));
+  if (mode === "avisar") return respond(remind(message));
 
   if (isCorrupt(stateDir, "bloqueios.json")) {
     writeJson(stateDir, "bloqueios.json", {});
@@ -182,24 +203,47 @@ function protect(stateDir, moduleId, input) {
   }
 
   if (repeatedThreeTimes(stateDir, toolName, toolInput)) {
-    return respond(allowWith(`Liberado pela trava de repetição (3ª tentativa idêntica em 10 minutos). Prefira o caminho indicado: ${message}`));
+    return respond(remind(`Liberado pela trava de repetição (3ª tentativa idêntica em 10 minutos). Prefira o caminho indicado: ${message}`));
   }
   respond({
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: message },
   });
 }
 
-function allowWith(context) {
-  return {
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", additionalContext: context },
-  };
+// ---------------------------------------------------------------------------
+// aprovacao (PreToolUse of git_pr_merge)
+// ---------------------------------------------------------------------------
+
+/** Always asks: the mode of the module, the heartbeat and the setup state do not matter here. */
+function approval(input) {
+  const toolInput = isObject(input.tool_input) ? input.tool_input : {};
+  const numero = prNumber(toolInput.numero);
+  const destino = typeof toolInput.destino === "string" ? toolInput.destino.trim() : "";
+  if (numero === undefined || destino === "" || destino.length > 255 || /[\r\n]/.test(destino)) return askApproval(GENERIC_APPROVAL);
+  askApproval(`Posso fazer o merge do PR #${numero} para a branch ${destino}?`);
+}
+
+function prNumber(value) {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d{1,10}$/.test(value.trim()) && Number(value) > 0) return Number(value);
+  return undefined;
+}
+
+function askApproval(reason) {
+  respond({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } });
+}
+
+/** A reminder for the model with no permission decision: the normal permission prompt still applies. */
+function remind(context) {
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: context } };
 }
 
 function resolveMode(config, moduleId) {
   const override = process.env.AI_ECOSYSTEM_HOOKS;
   if (override === "off" || override === "avisar" || override === "bloquear") return override;
   const own = isObject(config.modos) ? config.modos[moduleId] : undefined;
-  return own === "off" || own === "avisar" ? own : "bloquear";
+  if (own === "off" || own === "avisar" || own === "bloquear") return own;
+  return DEFAULT_MODES[moduleId] ?? "bloquear";
 }
 
 /** Returns the message when the module rule matches the tool call, otherwise undefined. */
@@ -213,6 +257,8 @@ function matchRule(moduleId, toolName, toolInput, env) {
       return scriptsRule(toolName, toolInput, env);
     case "ai-templates":
       return templatesRule(toolName, toolInput, env);
+    case "ai-git-tools":
+      return gitRule(toolName, toolInput);
     default:
       return undefined;
   }
@@ -267,9 +313,16 @@ function envKeysRule(toolName, toolInput, env) {
   return undefined;
 }
 
+/** The lowercase words of a command (or of one segment of it), without quotes and shell punctuation. */
+function commandWords(command) {
+  return command
+    .toLowerCase()
+    .split(/[\s;&|(){}`'"]+/)
+    .filter((word) => word !== "");
+}
+
 function hasHttpCommand(command) {
-  const words = command.toLowerCase().split(/[\s;&|(){}`'"]+/);
-  return words.some((word) => HTTP_COMMANDS.includes(word.replace(/\.exe$/, "")));
+  return commandWords(command).some((word) => HTTP_COMMANDS.includes(word.replace(/\.exe$/, "")));
 }
 
 function extractUrls(command) {
@@ -297,6 +350,35 @@ function hostMatches(pattern, url) {
   if (prefix === "") return true;
   const pathname = url.pathname.toLowerCase();
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+// ---- ai-git-tools ----------------------------------------------------------
+
+/** git or gh run from the terminal, or curl and friends against the GitHub and Bitbucket APIs. */
+function gitRule(toolName, toolInput) {
+  if (toolName !== "Bash" && toolName !== "PowerShell") return undefined;
+  const command = typeof toolInput.command === "string" ? toolInput.command : "";
+  for (const segment of splitCommands(command)) {
+    // The quote-aware tokens catch a quoted path with spaces ("C:/Program Files/Git/bin/git.exe").
+    const quoted = tokenize(segment).map((token) => token.toLowerCase());
+    if (runsGit(commandWords(segment)) || runsGit(quoted)) return MESSAGES["ai-git-tools"];
+  }
+  if (!hasHttpCommand(command)) return undefined;
+  for (const url of extractUrls(command)) {
+    if (GIT_HOSTS.includes(url.hostname.toLowerCase())) return MESSAGES["ai-git-tools"];
+  }
+  return undefined;
+}
+
+/** True when the words start (after VAR=value assignments) with git or gh, and it is not a help command. */
+function runsGit(words) {
+  let i = 0;
+  while (i < words.length && /^[a-z_][a-z0-9_]*=/.test(words[i])) i++;
+  const head = (words[i] ?? "").split(/[\\/]/).pop().replace(/\.exe$/, "");
+  if (!GIT_COMMANDS.includes(head)) return false;
+  const rest = words.slice(i + 1);
+  if (rest.length > 0 && GIT_HELP_WORDS.includes(rest[0])) return false;
+  return !rest.includes("--help");
 }
 
 // ---- ai-scripts ------------------------------------------------------------

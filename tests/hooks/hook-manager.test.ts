@@ -367,6 +367,52 @@ describe("protection hooks of a module", () => {
     expect(manager.getStatus().modules[0]!.installed).toHaveLength(0);
   });
 
+  it("installs the merge approval of AI Git Tools with its protection entry, and keeps it in mode off", async () => {
+    const manager = await started();
+    registry.add("ai-git-tools");
+    manager.handleRegistryChange({ type: "module-registered", moduleId: "ai-git-tools" });
+    await manager.whenReady();
+    manager.setMode("ai-git-tools", "off");
+    expect(await manager.installProtection("ai-git-tools")).toMatchObject({ ok: true });
+    const pre = settings().hooks.PreToolUse;
+    expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Bash|PowerShell", "mcp__.*__git_pr_merge"]);
+    expect(pre[1].hooks[0].command).toContain("ai-git-tools aprovacao");
+    expect(state("config.json").modos["ai-git-tools"]).toBe("off");
+
+    // Reapplying does not duplicate anything.
+    expect(await manager.installProtection("ai-git-tools")).toEqual({ ok: true, changed: false });
+    expect(settings().hooks.PreToolUse).toHaveLength(2);
+    const row = manager.getStatus().modules.find((m) => m.id === "ai-git-tools")!;
+    expect(row.installed.map((e) => e.type).sort()).toEqual(["aprovacao", "protecao"]);
+    expect(row.mode).toBe("off");
+
+    expect(manager.removeModule("ai-git-tools")).toEqual({ ok: true, changed: true });
+    expect(settings().hooks.PreToolUse).toBeUndefined();
+  });
+
+  it("writes the default mode avisar of AI Git Tools explicitly, and plans both entries", async () => {
+    const manager = await started();
+    expect(manager.state.getMode("ai-git-tools")).toBe("avisar");
+    expect(manager.state.getMode("ai-scripts")).toBe("bloquear");
+    expect(state("config.json").modos["ai-git-tools"]).toBeUndefined();
+
+    const plan = await manager.planInstall("ai-git-tools");
+    expect(plan.entries.map((e) => [e.matcher, e.command.split(" ").slice(-2).join(" ")])).toEqual([
+      ["Bash|PowerShell", "ai-git-tools protecao"],
+      ["mcp__.*__git_pr_merge", "ai-git-tools aprovacao"],
+    ]);
+
+    expect((await manager.installProtection("ai-git-tools")).ok).toBe(true);
+    expect(state("config.json").modos).toEqual({ "ai-git-tools": "avisar" });
+    // A mode chosen before is never replaced.
+    manager.setMode("ai-git-tools", "bloquear");
+    await manager.installProtection("ai-git-tools");
+    expect(state("config.json").modos["ai-git-tools"]).toBe("bloquear");
+    // Other modules keep an implicit "bloquear".
+    await manager.installProtection("ai-scripts");
+    expect(state("config.json").modos["ai-scripts"]).toBeUndefined();
+  });
+
   it("has no protection hook for modules without a rule (Telegram)", async () => {
     registry.add("telegram-ai-gateway");
     const manager = await started();

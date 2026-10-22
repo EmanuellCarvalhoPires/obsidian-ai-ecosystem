@@ -14,6 +14,16 @@ export const DEFAULT_SETTINGS_FILE = "settings.local.json";
 export const SETTINGS_FILES = ["settings.local.json", "settings.json"] as const;
 const SCHEMA_VERSION = 1;
 
+/** Mode of a module with no entry in config.modos. Modules not listed here default to "bloquear". */
+const MODULE_DEFAULT_MODES: Record<string, HookMode> = {
+  "ai-git-tools": "avisar",
+};
+
+/** The mode a module's protection hook has until the user picks one (the hook script uses the same table). */
+export function defaultMode(moduleId: string): HookMode {
+  return MODULE_DEFAULT_MODES[moduleId] ?? "bloquear";
+}
+
 export interface StateConfig {
   schemaVersion: number;
   vaultPath: string;
@@ -21,7 +31,7 @@ export interface StateConfig {
   settingsFile: string;
   /** Obsidian config folder name (app.vault.configDir); the Grep rule leaves it alone. */
   configDir?: string;
-  /** Missing mode means "bloquear". */
+  /** Missing mode means the module default (see defaultMode: "bloquear" for most modules). */
   modos: Record<string, HookMode>;
 }
 
@@ -173,7 +183,12 @@ export class StateDir {
   }
 
   getMode(moduleId: string): HookMode {
-    return this.readConfig()?.modos[moduleId] ?? "bloquear";
+    return this.readConfig()?.modos[moduleId] ?? defaultMode(moduleId);
+  }
+
+  /** Whether the user (or the setup) stored a mode for the module. */
+  hasExplicitMode(moduleId: string): boolean {
+    return this.readConfig()?.modos[moduleId] !== undefined;
   }
 
   setMode(moduleId: string, mode: HookMode): void {
