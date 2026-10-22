@@ -10,7 +10,7 @@ Regras fixas: nenhum emoji na UI (só `setIcon` com ícones Lucide); usar `app.v
 | --- | --- | --- |
 | Entrada do `PreToolUse` | stdin JSON com `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`, `tool_name`, `tool_input`, `tool_use_id` (MCP: `mcp_server`) | o script lê `tool_name`, `tool_input`, `cwd` |
 | Negar | exit 0 + stdout `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"..."}}` | usado no modo `bloquear` |
-| Permitir com aviso | `permissionDecision: "allow"` + `hookSpecificOutput.additionalContext` (chega ao modelo como system reminder). `systemMessage` só aparece ao usuário | usado no modo `avisar` e na trava da 3ª tentativa |
+| Lembrete sem decisão | só `hookSpecificOutput.additionalContext`, sem `permissionDecision` (chega ao modelo como system reminder e a chamada segue as regras de permissão normais do usuário). Nunca `allow`: ele aprovaria a chamada e pularia o prompt de permissão do Claude Code. `systemMessage` só aparece ao usuário | usado no modo `avisar` e na trava da 3ª tentativa |
 | `PostToolUse` | só roda em **sucesso**. Falha de tool (inclusive MCP com erro) vai para **`PostToolUseFailure`** (campo `error`) | o marcador de falha usa `PostToolUseFailure`; o sucesso é limpo pelo próprio núcleo (ver 4.4) |
 | Matchers | só letras/dígitos/`_`/`-`/`|`/`,` = nome exato ou lista; qualquer outro caractere = regex JS sem âncora | `mcp__.*` funciona; `Grep|Glob`, `Bash|PowerShell`, `Write` são listas exatas |
 | Ferramentas | `PowerShell` existe (`tool_input.command`); `Write` (`file_path` absoluto, `content`); `Grep` (`pattern`, `path`, `glob`...); `Glob` (`pattern`, `path`) | regras da fase 1 |
@@ -78,7 +78,7 @@ Regras gerais: só `node:fs`, `node:path`, `node:crypto`; sem rede; lê só os a
 3. `falhas.json[<modulo>]` com menos de 10 min → libera.
 4. Modo (`AI_ECOSYSTEM_HOOKS` > `config.modos[<modulo>]` > `bloquear`); `off` → libera.
 5. Aplica a regra do módulo (4.2). Se não casar → libera sem saída.
-6. Casou: `avisar` → `allow` + `additionalContext` com a mensagem. `bloquear` → trava de repetição: hash sha1 de `tool_name` + `JSON.stringify(tool_input)` normalizado (chaves ordenadas, espaços colapsados em `command`); se esta for a 3ª tentativa idêntica em 10 min → `allow` + `additionalContext` ("liberado pela trava de repetição; prefira ...") e zera o contador; senão incrementa e devolve `deny` com a mensagem.
+6. Casou: `avisar` → só `additionalContext` com a mensagem (sem `permissionDecision`). `bloquear` → trava de repetição: hash sha1 de `tool_name` + `JSON.stringify(tool_input)` normalizado (chaves ordenadas, espaços colapsados em `command`); se esta for a 3ª tentativa idêntica em 10 min → só `additionalContext` ("liberado pela trava de repetição; prefira ...") e zera o contador; senão incrementa e devolve `deny` com a mensagem.
 
 ### 4.2 Regras por módulo
 

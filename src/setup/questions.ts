@@ -336,6 +336,198 @@ function templatesQuestions(ctx: QuestionContext): Question[] {
   ];
 }
 
+function logManagerQuestions(ctx: QuestionContext): Question[] {
+  const existingLogs = typeof ctx.module.existingLogs === "number" ? ctx.module.existingLogs : 0;
+  const clones = stringList(ctx.module.projectsWithClone);
+  const hooksInstalled = ctx.module.hooksInstalled === true;
+  const root = ctx.module.projectsRoot;
+  return [
+    {
+      chave: "modo_dos_logs",
+      pergunta: { pt: "Como o AI Log Manager deve tratar os logs?", en: "How should the AI Log Manager handle the logs?" },
+      tipo: "unica",
+      opcoes: [
+        { valor: "observe", rotulo: { pt: "Só observar (compara, não grava)", en: "Observe only (compares, writes nothing)" }, recomendada: existingLogs > 0 },
+        { valor: "active", rotulo: { pt: "Ativo (cria e atualiza os logs)", en: "Active (creates and updates the logs)" }, recomendada: existingLogs === 0 },
+      ],
+      salvar: true,
+      sugestao: existingLogs > 0 ? "observe" : "active",
+    },
+    {
+      chave: "pastas_acompanhadas",
+      pergunta: {
+        pt: "Quais pastas fora do cofre também devem ganhar log das conversas? (o cofre e os clones dos projetos já entram)",
+        en: "Which folders outside the vault should also get conversation logs? (the vault and project clones are already included)",
+      },
+      tipo: "lista",
+      salvar: true,
+    },
+    {
+      chave: "registrar_eventos_dev",
+      pergunta: {
+        pt: "Registrar commits, pushes e branches dos projetos com clone como notas?",
+        en: "Record commits, pushes and branches of projects with a clone as notes?",
+      },
+      tipo: "sim_nao",
+      opcoes: [
+        { valor: "true", rotulo: { pt: "Sim", en: "Yes" }, recomendada: clones.length > 0 },
+        { valor: "false", rotulo: { pt: "Não", en: "No" }, recomendada: clones.length === 0 },
+      ],
+      salvar: true,
+      sugestao: clones.length > 0 ? clones : undefined,
+    },
+    {
+      chave: "ler_remoto",
+      pergunta: {
+        pt: "Ler PRs e deploys do GitHub ou Bitbucket pelo Environment Keys?",
+        en: "Read PRs and deploys from GitHub or Bitbucket through Environment Keys?",
+      },
+      tipo: "sim_nao",
+      opcoes: [
+        { valor: "false", rotulo: { pt: "Não", en: "No" }, recomendada: true },
+        { valor: "true", rotulo: { pt: "Sim (precisa de uma secret com o token)", en: "Yes (needs a secret with the token)" } },
+      ],
+      salvar: true,
+    },
+    {
+      chave: "instalar_hooks",
+      pergunta: {
+        pt: "Instalar os hooks do Claude Code? (altera o settings.json global, com cópia de segurança)",
+        en: "Install the Claude Code hooks? (changes the global settings.json, with a backup)",
+      },
+      tipo: "sim_nao",
+      opcoes: [
+        { valor: "true", rotulo: { pt: "Sim", en: "Yes" }, recomendada: true },
+        { valor: "false", rotulo: { pt: "Não", en: "No" } },
+      ],
+      salvar: true,
+      detectado: hooksInstalled ? true : undefined,
+    },
+    {
+      chave: "pasta_dos_projetos",
+      pergunta: { pt: "Qual pasta do cofre guarda os projetos de desenvolvimento?", en: "Which vault folder holds the development projects?" },
+      tipo: "texto",
+      salvar: true,
+      detectado: ctx.module.projectsRootExists === true && isNonEmptyString(root) ? root : undefined,
+      sugestao: isNonEmptyString(root) ? root : undefined,
+    },
+  ];
+}
+
+/** The value the AI Git Tools secret questions use for "no secret": the module stores an empty string. */
+export const NO_SECRET = "nenhuma";
+
+interface SecretRow {
+  name: string;
+  type?: string;
+  allowedHosts: string[];
+  allowAnyHost: boolean;
+}
+
+/**
+ * The secrets the module detected (names and metadata only, never values). Accepts plain names
+ * or rows shaped like the Environment Keys `listSecretMetadata` result.
+ */
+function secretRows(value: unknown): SecretRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: SecretRow[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    let row: SecretRow | undefined;
+    if (isNonEmptyString(item)) {
+      row = { name: item.trim(), allowedHosts: [], allowAnyHost: false };
+    } else if (typeof item === "object" && item !== null) {
+      const raw = item as Record<string, unknown>;
+      if (isNonEmptyString(raw.name)) {
+        row = {
+          name: raw.name.trim(),
+          type: isNonEmptyString(raw.type) ? raw.type : undefined,
+          allowedHosts: stringList(raw.allowedHosts).map((h) => h.trim().toLowerCase()),
+          allowAnyHost: raw.allowAnyHost === true,
+        };
+      }
+    }
+    if (row && row.name !== NO_SECRET && !seen.has(row.name)) {
+      seen.add(row.name);
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+
+/** Host part of an allowed-host entry ("https://api.github.com/x", "*.github.com" or "api.github.com:443"). */
+function hostOf(entry: string): string {
+  return entry.replace(/^[a-z]+:\/\//, "").replace(/^\*\./, "").split(/[/:]/)[0] ?? "";
+}
+
+/**
+ * The secrets that may serve a provider. When no secret carries host data (plain names), all of
+ * them are listed; otherwise the ones allowed for the provider's hosts, plus the ones open to any host.
+ */
+function secretsFor(rows: SecretRow[], hosts: string[]): SecretRow[] {
+  const withHostData = rows.some((r) => r.allowAnyHost || r.allowedHosts.length > 0);
+  if (!withHostData) return rows;
+  return rows.filter((r) => r.allowAnyHost || r.allowedHosts.some((entry) => hosts.includes(hostOf(entry))));
+}
+
+function secretOptions(rows: SecretRow[]): QuestionOption[] {
+  // No option is ever recommended and no name is suggested (decision D6): the user picks.
+  const options: QuestionOption[] = rows.map((r) => ({
+    valor: r.name,
+    rotulo: r.type ? { pt: `${r.name} (${r.type})`, en: `${r.name} (${r.type})` } : { pt: r.name, en: r.name },
+  }));
+  options.push({ valor: NO_SECRET, rotulo: { pt: "Nenhuma (configurar depois)", en: "None (set it up later)" } });
+  return options;
+}
+
+function gitToolsQuestions(ctx: QuestionContext): Question[] {
+  const rows = secretRows(ctx.module.secrets);
+  const root = ctx.module.projectsRoot;
+  return [
+    {
+      chave: "modo_hooks",
+      pergunta: {
+        pt: "Como o hook do AI Git Tools deve reagir a git, gh ou chamadas às APIs do GitHub e do Bitbucket pelo terminal?",
+        en: "How should the AI Git Tools hook react to git, gh or calls to the GitHub and Bitbucket APIs from the terminal?",
+      },
+      tipo: "unica",
+      opcoes: [
+        { valor: "avisar", rotulo: { pt: "Avisar", en: "Warn" }, recomendada: true },
+        { valor: "bloquear", rotulo: { pt: "Bloquear", en: "Block" } },
+        { valor: "off", rotulo: { pt: "Desligado", en: "Off" } },
+      ],
+      salvar: true,
+    },
+    {
+      chave: "secret_bitbucket",
+      pergunta: {
+        pt: "Qual secret o AI Git Tools usa para as APIs do Bitbucket (PR e pipeline)?",
+        en: "Which secret does AI Git Tools use for the Bitbucket APIs (PR and pipeline)?",
+      },
+      tipo: "unica",
+      opcoes: secretOptions(secretsFor(rows, ["api.bitbucket.org", "bitbucket.org"])),
+      salvar: true,
+    },
+    {
+      chave: "secret_github",
+      pergunta: {
+        pt: "Qual secret o AI Git Tools usa para as APIs do GitHub (PR e pipeline)?",
+        en: "Which secret does AI Git Tools use for the GitHub APIs (PR and pipeline)?",
+      },
+      tipo: "unica",
+      opcoes: secretOptions(secretsFor(rows, ["api.github.com", "github.com"])),
+      salvar: true,
+    },
+    {
+      chave: "pasta_dos_projetos",
+      pergunta: { pt: "Qual pasta do cofre guarda os projetos de desenvolvimento?", en: "Which vault folder holds the development projects?" },
+      tipo: "texto",
+      salvar: true,
+      detectado: ctx.module.projectsRootExists === true && isNonEmptyString(root) ? root : undefined,
+    },
+  ];
+}
+
 function questionsOf(moduleId: string, ctx: QuestionContext): Question[] {
   switch (moduleId) {
     case ECOSYSTEM_ID:
@@ -350,6 +542,10 @@ function questionsOf(moduleId: string, ctx: QuestionContext): Question[] {
       return scriptsQuestions(ctx);
     case "ai-templates":
       return templatesQuestions(ctx);
+    case "ai-log-manager":
+      return logManagerQuestions(ctx);
+    case "ai-git-tools":
+      return gitToolsQuestions(ctx);
     default:
       return [];
   }

@@ -4,6 +4,10 @@
 import type { Lang } from "../i18n";
 import aiEcosystemEn from "./skills/ai-ecosystem.en.md?raw";
 import aiEcosystemPt from "./skills/ai-ecosystem.pt.md?raw";
+import aiGitToolsEn from "./skills/ai-git-tools.en.md?raw";
+import aiGitToolsPt from "./skills/ai-git-tools.pt.md?raw";
+import aiLogManagerEn from "./skills/ai-log-manager.en.md?raw";
+import aiLogManagerPt from "./skills/ai-log-manager.pt.md?raw";
 import aiScriptsEn from "./skills/ai-scripts.en.md?raw";
 import aiScriptsPt from "./skills/ai-scripts.pt.md?raw";
 import aiTemplatesEn from "./skills/ai-templates.en.md?raw";
@@ -26,6 +30,8 @@ const SPECIFIC: Record<string, Record<Lang, string>> = {
   "ai-vault-search": { en: aiVaultSearchEn, pt: aiVaultSearchPt },
   "ai-scripts": { en: aiScriptsEn, pt: aiScriptsPt },
   "ai-templates": { en: aiTemplatesEn, pt: aiTemplatesPt },
+  "ai-log-manager": { en: aiLogManagerEn, pt: aiLogManagerPt },
+  "ai-git-tools": { en: aiGitToolsEn, pt: aiGitToolsPt },
 };
 
 const GENERIC: Record<Lang, string> = { en: genericEn, pt: genericPt };

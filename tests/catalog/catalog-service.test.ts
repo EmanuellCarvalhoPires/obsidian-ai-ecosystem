@@ -14,13 +14,10 @@ const good = (id: string, repo = `EmanuellCarvalhoPires/obsidian-${id}`) => ({
 
 describe("validateCatalog", () => {
   it("keeps the embedded catalog intact", () => {
-    expect(validateCatalog(embedded).modules.map((m) => m.id)).toEqual([
-      "environment-variables",
-      "telegram-ai-gateway",
-      "ai-templates",
-      "ai-scripts",
-      "ai-vault-search",
-    ]);
+    const ids = validateCatalog(embedded).modules.map((m) => m.id);
+    expect(ids).toEqual(embedded.modules.map((m) => m.id));
+    expect(ids).toContain("ai-log-manager");
+    expect(ids).toContain("ai-git-tools");
   });
   it("accepts the owner case-insensitively", () => {
     const c = validateCatalog({ version: 1, modules: [good("a", "emanuellcarvalhopires/x")] });
@@ -66,7 +63,7 @@ describe("CatalogService", () => {
     const svc2 = new CatalogService({ embedded: emb, fetchJson: vi.fn().mockResolvedValue({ version: 1, modules: [] }) });
     const r = await svc2.load();
     expect(r.source).toBe("embedded");
-    expect(r.catalog.modules).toHaveLength(5);
+    expect(r.catalog.modules).toHaveLength(emb.modules.length);
   });
   it("caches until the ttl and reloads on force", async () => {
     const fetchJson = vi.fn().mockResolvedValue(remote);

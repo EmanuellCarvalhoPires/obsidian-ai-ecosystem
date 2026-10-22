@@ -279,11 +279,12 @@ describe("hook script: modes and the AI_ECOSYSTEM_HOOKS override", () => {
 
   beforeEach(() => world.module(SEARCH));
 
-  it("avisar allows with a context for the model", () => {
+  it("avisar only adds a context for the model, with no permission decision", () => {
     world.config({ modos: { [SEARCH]: "avisar" } });
     const run = call();
-    expect(run.decision).toBe("allow");
-    expect(run.context).toContain("search_notes");
+    expect(run.json?.hookSpecificOutput).toEqual({ hookEventName: "PreToolUse", additionalContext: expect.stringContaining("search_notes") });
+    expect(run.decision).toBeUndefined();
+    expect(run.stdout).not.toContain("permissionDecision");
   });
 
   it("off prints nothing", () => {
@@ -299,7 +300,9 @@ describe("hook script: modes and the AI_ECOSYSTEM_HOOKS override", () => {
   it("the environment variable wins over the config", () => {
     world.config({ modos: { [SEARCH]: "bloquear" } });
     expect(call({ AI_ECOSYSTEM_HOOKS: "off" }).stdout).toBe("");
-    expect(call({ AI_ECOSYSTEM_HOOKS: "avisar" }).decision).toBe("allow");
+    const warned = call({ AI_ECOSYSTEM_HOOKS: "avisar" });
+    expect(warned.decision).toBeUndefined();
+    expect(warned.context).toContain("search_notes");
     world.config({ modos: { [SEARCH]: "off" } });
     expect(call({ AI_ECOSYSTEM_HOOKS: "bloquear" }).decision).toBe("deny");
     expect(call({ AI_ECOSYSTEM_HOOKS: "nonsense" }).stdout).toBe("");
@@ -314,7 +317,8 @@ describe("hook script: repetition lock", () => {
     expect(call().decision).toBe("deny");
     expect(call().decision).toBe("deny");
     const third = call();
-    expect(third.decision).toBe("allow");
+    expect(third.decision).toBeUndefined();
+    expect(third.stdout).not.toContain("permissionDecision");
     expect(third.context).toContain("trava de repetição");
     expect(third.context).toContain("search_notes");
     expect(call().decision).toBe("deny");
@@ -327,7 +331,9 @@ describe("hook script: repetition lock", () => {
     expect(bash("python  scripts/x.py").decision).toBe("deny");
     expect(bash("python scripts/y.py").decision).toBe("deny");
     expect(bash("python scripts/x.py").decision).toBe("deny");
-    expect(bash("python  scripts/x.py   ").decision).toBe("allow");
+    const third = bash("python  scripts/x.py   ");
+    expect(third.decision).toBeUndefined();
+    expect(third.context).toContain("trava de repetição");
   });
 
   it("forgets attempts older than 10 minutes", () => {
@@ -422,5 +428,130 @@ describe("hook script: falha (PostToolUseFailure)", () => {
     expect(world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("a") }).decision).toBe("deny");
     world.run("ai-ecosystem", "falha", { tool_name: "mcp__vault__search_notes" });
     expect(world.tool(SEARCH, "Grep", { pattern: "y", path: world.abs("a") }).stdout).toBe("");
+  });
+});
+
+describe("hook script: ai-git-tools (git, gh and the GitHub and Bitbucket APIs)", () => {
+  const GIT = "ai-git-tools";
+  beforeEach(() => world.module(GIT));
+
+  it("warns by default (mode avisar): the call goes on with the reminder in the context", () => {
+    for (const [tool, command] of [
+      ["Bash", "git commit -m x"],
+      ["Bash", "curl https://api.bitbucket.org/2.0/repositories/ws/repo/pullrequests"],
+      ["Bash", "gh pr create --title x --base develop"],
+      ["Bash", "cd x && git push"],
+      ["PowerShell", "Set-Location C:/repo; git.exe status"],
+      ["PowerShell", "Invoke-RestMethod -Uri https://api.github.com/repos/o/r/pulls"],
+      ["Bash", 'GIT_TRACE=1 "/c/Program Files/Git/bin/git.exe" log'],
+    ] as const) {
+      const run = world.tool(GIT, tool, { command });
+      expect(run.decision, command).toBeUndefined();
+      expect(run.stdout, command).not.toContain("permissionDecision");
+      expect(run.context, command).toContain("git_commit");
+      expect(run.context, command).toContain("AI Git Tools");
+    }
+  });
+
+  it("leaves help commands, other hosts and the word github without curl alone", () => {
+    for (const command of [
+      "git --version",
+      "git help commit",
+      "git -h",
+      "git --help",
+      "git commit --help",
+      "gh --version",
+      "echo github",
+      "echo git is great",
+      "curl https://example.com/github.com",
+      "curl https://raw.githubusercontent.com/o/r/main/x",
+      "ls -la",
+      "digit status",
+    ]) {
+      expect(world.tool(GIT, "Bash", { command }).stdout, command).toBe("");
+    }
+  });
+
+  it("ignores other tools", () => {
+    expect(world.tool(GIT, "Write", { file_path: world.abs("a.md"), content: "git commit" }).stdout).toBe("");
+  });
+
+  it("denies in mode bloquear and does nothing in mode off", () => {
+    world.config({ modos: { [GIT]: "bloquear" } });
+    const blocked = world.tool(GIT, "Bash", { command: "git commit -m x" });
+    expect(blocked.decision).toBe("deny");
+    expect(blocked.reason).toContain("git_status");
+
+    world.config({ modos: { [GIT]: "off" } });
+    expect(world.tool(GIT, "Bash", { command: "git commit -m x" }).stdout).toBe("");
+  });
+
+  it("keeps the other modules on bloquear by default", () => {
+    world.module(TEMPLATES);
+    world.pastas({ templates: ["Notas/**"] });
+    expect(world.tool(TEMPLATES, "Write", { file_path: world.abs("Notas", "nova.md"), content: "x" }).decision).toBe("deny");
+  });
+});
+
+describe("hook script: aprovacao (git_pr_merge)", () => {
+  const GIT = "ai-git-tools";
+  const MERGE = "mcp__environment-variables__git_pr_merge";
+
+  function approve(input: Record<string, unknown>) {
+    return world.run(GIT, "aprovacao", { hook_event_name: "PreToolUse", tool_name: MERGE, ...input });
+  }
+
+  it("asks with the PR number and the target branch", () => {
+    world.module(GIT);
+    const run = approve({ tool_input: { repo: "Projeto", numero: 12, destino: "develop", titulo: "x" } });
+    expect(run.status).toBe(0);
+    expect(run.json?.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "ask",
+      permissionDecisionReason: "Posso fazer o merge do PR #12 para a branch develop?",
+    });
+    expect(approve({ tool_input: { numero: "7", destino: "main" } }).reason).toBe("Posso fazer o merge do PR #7 para a branch main?");
+  });
+
+  it("asks with a generic text when numero or destino is missing or invalid", () => {
+    world.module(GIT);
+    for (const toolInput of [{}, { numero: 12 }, { destino: "develop" }, { numero: "abc", destino: "develop" }, { numero: 12, destino: "  " }, { numero: -1, destino: "x" }]) {
+      const run = approve({ tool_input: toolInput });
+      expect(run.decision, JSON.stringify(toolInput)).toBe("ask");
+      expect(run.reason).toBe("Posso fazer o merge deste PR?");
+    }
+    expect(approve({}).decision).toBe("ask");
+  });
+
+  it("asks even when the input cannot be read (it never fails open)", () => {
+    for (const input of ["not json", "", "[1,2]"]) {
+      const result = spawnSync(process.execPath, [world.script, GIT, "aprovacao"], { input, encoding: "utf8", timeout: 15000 });
+      expect(result.status, input).toBe(0);
+      const out = JSON.parse(result.stdout) as { hookSpecificOutput: Record<string, unknown> };
+      expect(out.hookSpecificOutput).toMatchObject({ permissionDecision: "ask", permissionDecisionReason: "Posso fazer o merge deste PR?" });
+    }
+  });
+
+  it("asks when its input never closes (the guard asks instead of allowing)", async () => {
+    const run = await runWithOpenStdin(world, GIT, "aprovacao");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain('"permissionDecision":"ask"');
+  });
+
+  it("ignores the mode, the heartbeat and the setup state of the module", () => {
+    world.config({ modos: { [GIT]: "off" } });
+    world.heartbeat(null);
+    const input = { tool_input: { numero: 12, destino: "develop" } };
+    expect(approve(input).reason).toBe("Posso fazer o merge do PR #12 para a branch develop?");
+    expect(world.run(GIT, "aprovacao", { tool_name: MERGE, ...input }, { AI_ECOSYSTEM_HOOKS: "off" }).decision).toBe("ask");
+    world.module(GIT, "pendente_configuracao");
+    expect(approve(input).decision).toBe("ask");
+  });
+
+  it("never answers allow", () => {
+    world.module(GIT);
+    for (const toolInput of [{ numero: 1, destino: "develop" }, {}, { numero: 1, destino: "a\nb" }]) {
+      expect(approve({ tool_input: toolInput }).decision).not.toBe("allow");
+    }
   });
 });

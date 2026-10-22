@@ -32,7 +32,7 @@ describe("buildGuideBlock", () => {
 
   it("lists every module of the suite, in the language asked", () => {
     const all = knownGuideModules();
-    expect(all).toEqual(["ai-ecosystem", "ai-vault-search", "ai-scripts", "ai-templates", "environment-variables", "telegram-ai-gateway"]);
+    expect(all).toEqual(["ai-ecosystem", "ai-vault-search", "ai-scripts", "ai-templates", "ai-log-manager", "ai-git-tools", "environment-variables", "telegram-ai-gateway"]);
     const block = buildGuideBlock({ lang: "pt", modules: all, target: "claude" });
     for (const tool of ["search_notes", "run_ai_script", "create_note_from_template", "http_request", "env_criar_secret", "telegram_ask_approval", "tela_criar"]) {
       expect(block).toContain(`\`${tool}\``);
