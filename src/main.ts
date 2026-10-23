@@ -235,6 +235,10 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     this.core.detector.clearCache();
   }
 
+  onToolExposureChanged(): void {
+    this.core.server.notifyListChanged("tools");
+  }
+
   async openInspector(placement: "sidebar" | "tab" = "tab"): Promise<void> {
     await this.openView(INSPECTOR_VIEW_TYPE, placement);
   }

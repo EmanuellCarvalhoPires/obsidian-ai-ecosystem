@@ -13,7 +13,7 @@
 ## Regras que não mudam
 
 - **Nunca peça token, senha, chave de API ou qualquer segredo no chat.** Se o usuário colar um, não repita o valor, não o grave em lugar nenhum e peça para ele trocar essa credencial. Segredos entram só pela tela `env_criar_secret`, que o usuário preenche no Obsidian.
-- Não use o terminal, nem leia ou edite os arquivos de `.claude/ai-ecosystem/`, para contornar um problema. Se uma ferramenta de que esta skill precisa (`ecosystem_setup_status`, `ecosystem_setup_save`, `ecosystem_setup_complete` ou outra) não estiver na sua lista de ferramentas, peça ao usuário para reiniciar a sessão do Claude Code e tente de novo depois.
+- Não use o terminal, nem leia ou edite os arquivos de `.claude/ai-ecosystem/`, para contornar um problema. Se uma ferramenta de que esta skill precisa (`ecosystem_setup_status`, `ecosystem_setup_save`, `ecosystem_setup_complete` ou outra) não estiver na sua lista de ferramentas, o servidor pode estar no modo indexado: procure-a com `tools_find` e execute-a com `tools_run` (`{"id": "<tool>", "args": {...}}`). Se nem `tools_find` estiver na lista, peça ao usuário para reiniciar a sessão do Claude Code e tente de novo depois.
 - Nunca apague nem mova arquivos do usuário.
 
 ## Bloco de guia no CLAUDE.md

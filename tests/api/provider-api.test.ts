@@ -188,6 +188,7 @@ describe("createPublicApi", () => {
         "registerModule",
         "registerService",
         "runScript",
+        "toolIndex",
         "unregisterModule",
         "unregisterService",
         "updatePrompts",

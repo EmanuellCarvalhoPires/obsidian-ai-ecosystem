@@ -3,6 +3,8 @@
 import {
   AI_ECOSYSTEM_API_VERSION,
   ECOSYSTEM_ID,
+  type ToolIndexApi,
+  type ToolIndexEntry,
   type AIEcosystemAPI,
   type ActivityHandle,
   type ActivitySink,
@@ -29,6 +31,8 @@ export interface ProviderApiDeps {
   activity: ActivitySink;
   importClients: (clients: ClientRecord[], sourceModuleId: string) => Promise<number>;
   getServerStatus: () => ServerStatus;
+  /** Writes the tools.db of a module. Without it (no vault path), toolIndex.sync resolves without writing. */
+  syncToolIndex?: (moduleId: string, entries: ToolIndexEntry[]) => Promise<void> | void;
 }
 
 type ActivityEntryInput = Parameters<AIEcosystemAPI["logActivity"]>[0];
@@ -37,6 +41,13 @@ type ActivityBeginInput = NonNullable<Parameters<NonNullable<AIEcosystemAPI["beg
 export class ProviderApi implements AIEcosystemAPI {
   readonly apiVersion = AI_ECOSYSTEM_API_VERSION;
   private readonly unsubscribeBus: () => void;
+
+  readonly toolIndex: ToolIndexApi = {
+    sync: async (moduleId, entries) => {
+      if (!this.deps.registry.has(moduleId)) throw new Error("Only registered modules can sync a tool index");
+      await this.deps.syncToolIndex?.(moduleId, entries);
+    },
+  };
 
   constructor(private readonly deps: ProviderApiDeps) {
     this.unsubscribeBus = deps.bus.onChange((name, available) => deps.lifecycle.serviceChanged(name, available));
@@ -173,5 +184,9 @@ export function createPublicApi(impl: AIEcosystemAPI): AIEcosystemAPI {
     logActivity: (entry: ActivityEntryInput) => impl.logActivity(entry),
     beginActivity: (entry: ActivityBeginInput) => impl.beginActivity?.(entry) as ActivityHandle,
     getServerStatus: () => impl.getServerStatus(),
+    toolIndex: Object.freeze({
+      sync: (moduleId: string, entries: ToolIndexEntry[]) =>
+        impl.toolIndex ? impl.toolIndex.sync(moduleId, entries) : Promise.resolve(),
+    }),
   });
 }

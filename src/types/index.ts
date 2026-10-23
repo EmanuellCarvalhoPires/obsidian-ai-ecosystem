@@ -13,6 +13,13 @@
 /** Provider API version implemented by this build. */
 export const AI_ECOSYSTEM_API_VERSION = 1;
 
+/**
+ * Minor revision of the Provider API. Only grows with additive, backwards-compatible changes
+ * (1.1: optional HubTool index metadata, api.toolIndex.sync, indexed discovery with tools_find,
+ * tools_describe and tools_run, and the optional "tool-runner:<id>" service). Modules need not check it.
+ */
+export const AI_ECOSYSTEM_API_MINOR_VERSION = 1;
+
 /** Provider API versions this build accepts from modules. */
 export const SUPPORTED_API_VERSIONS: readonly number[] = [1];
 
@@ -160,7 +167,81 @@ export interface HubTool {
    * setup (e.g. a tool the setup skill itself uses). Other tools of that module are hidden.
    */
   availableDuringSetup?: boolean;
+  /** Index metadata (API 1.1). All optional; defaults are inferred from description and annotations. */
+  categoria?: string;
+  tags?: string[];
+  /** One line, recommended <= 100 characters. */
+  resumo?: string;
+  efeito?: ToolEffect;
+  exposicao?: ToolExposure;
+  /**
+   * Approval policy read by the tools_run hook: a question template with {arg} placeholders
+   * (e.g. "Posso fazer o merge do PR #{numero} para a branch {destino}?"), "obrigatoria" (always
+   * ask) or "dispensada" (never ask, even with efeito "externo"). Without it, "externo" asks.
+   */
+  aprovacao?: string;
+  /** Example arguments shown by tools_describe. */
+  exemplo?: Record<string, unknown>;
   handler: (args: Record<string, unknown>, ctx: HubCallContext) => Promise<HubToolResult>;
+}
+
+export type ToolEffect = "leitura" | "cofre" | "externo";
+export type ToolExposure = "fixa" | "indice";
+/** What an index entry stands for: a tool, a script, a template or an API call of a vault tool note. */
+export type ToolKind = "tool" | "script" | "template" | "api";
+
+/** aprovacao values with a fixed meaning (anything else is a question template). */
+export const APPROVAL_REQUIRED = "obrigatoria";
+export const APPROVAL_WAIVED = "dispensada";
+
+/** What a module writes into its tools.db through api.toolIndex.sync. */
+export interface ToolIndexEntry {
+  name: string;
+  title?: string;
+  description: string;
+  inputSchema?: Record<string, unknown>;
+  annotations?: HubTool["annotations"];
+  /** Default "tool". */
+  kind?: ToolKind;
+  categoria?: string;
+  tags?: string[];
+  resumo?: string;
+  efeito?: ToolEffect;
+  exposicao?: ToolExposure;
+  aprovacao?: string;
+  exemplo?: Record<string, unknown>;
+}
+
+/**
+ * Service a module registers (name: toolRunnerServiceName(moduleId)) to run index entries that
+ * are not registered MCP tools (e.g. the API tools of vault notes). tools_run calls it when the
+ * id is in the module's tools.db but not in the registry. The result goes back as is.
+ */
+export interface IndexedToolRunner {
+  run(id: string, args: Record<string, unknown>, ctx: HubCallContext): Promise<HubToolResult>;
+}
+
+export const TOOL_RUNNER_SERVICE_PREFIX = "tool-runner:";
+
+export function toolRunnerServiceName(moduleId: string): string {
+  return `${TOOL_RUNNER_SERVICE_PREFIX}${moduleId}`;
+}
+
+/** The three tools of indexed discovery (always listed). */
+export const DISCOVERY_TOOL_NAMES: readonly string[] = ["tools_find", "tools_describe", "tools_run"];
+
+/** How tools/list looks for a kind of client: every tool, or only the fixed ones plus discovery. */
+export type ToolExposureMode = "completo" | "indexado";
+
+export interface ToolExposureSettings {
+  modes: Record<ClientKind, ToolExposureMode>;
+  /** Tool names that stay in tools/list in indexado mode (besides discovery and exposicao "fixa"). */
+  fixedTools: string[];
+}
+
+export interface ToolIndexApi {
+  /** Incrementally syncs the module's .obsidian/plugins/<id>/tools.db (unchanged tools are skipped by hash). */
+  sync(moduleId: string, entries: ToolIndexEntry[]): Promise<void>;
 }
 
 export interface HubPromptMessage {
@@ -568,6 +649,9 @@ export interface AIEcosystemAPI {
   beginActivity?(entry: ActivityBeginInput): ActivityHandle;
 
   getServerStatus(): { running: boolean; port: number; activeModules: string[] };
+
+  /** API 1.1. Absent on older Ecosystem builds: modules should check before use. */
+  readonly toolIndex?: ToolIndexApi;
 }
 
 // ---------------------------------------------------------------------------
@@ -597,7 +681,11 @@ export interface AIEcosystemSettings {
   inspector: { maxEntries: number };
   /** Screens the agent can create (tela_criar). */
   screens: { maxScreens: number };
+  /** tools/list exposure per kind of client (indexed discovery). */
+  toolExposure: ToolExposureSettings;
 }
+
+export const DEFAULT_FIXED_TOOLS: readonly string[] = ["search_notes", "get_section"];
 
 export const DEFAULT_SETTINGS: AIEcosystemSettings = {
   port: 27150,
@@ -612,6 +700,10 @@ export const DEFAULT_SETTINGS: AIEcosystemSettings = {
   },
   inspector: { maxEntries: 500 },
   screens: { maxScreens: 30 },
+  toolExposure: {
+    modes: { "claude-code": "completo", antigravity: "completo", other: "completo" },
+    fixedTools: [...DEFAULT_FIXED_TOOLS],
+  },
 };
 
 // ---------------------------------------------------------------------------

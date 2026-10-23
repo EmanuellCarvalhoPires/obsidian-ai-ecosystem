@@ -16,22 +16,35 @@ import { BinaryDetector } from "../runner/binary-detector";
 import { ScriptEngine } from "../runner/script-engine";
 import type { ScreenHost } from "../screens/host";
 import { ScreenService } from "../screens/service";
+import { ToolFederation } from "../tool-index/federation";
+import { ToolIndexWriter, toIndexEntry, toolIndexPath } from "../tool-index/tool-index-writer";
 import { ScreenStore, screensDir } from "../screens/store";
 import { SetupManager } from "../setup/setup-manager";
 import type { Lang } from "../i18n";
 import { ClientAuth } from "../server/auth";
 import { ServerHost } from "../server/server-host";
 import type { ServerHostOptions } from "../server/server-host";
-import { AI_ECOSYSTEM_API_VERSION, ECOSYSTEM_ID, HOOKS_SERVICE, SECRETS_SERVICE, SUPPORTED_API_VERSIONS } from "../types";
+import {
+  AI_ECOSYSTEM_API_VERSION,
+  DEFAULT_FIXED_TOOLS,
+  DISCOVERY_TOOL_NAMES,
+  ECOSYSTEM_ID,
+  HOOKS_SERVICE,
+  SECRETS_SERVICE,
+  SUPPORTED_API_VERSIONS,
+} from "../types";
 import type {
   AIEcosystemAPI,
   AIEcosystemSettings,
+  ClientKind,
   ClientRecord,
+  RegisteredTool,
   RegistryChange,
   SecretVaultService,
   ServerStatus,
+  ToolExposureMode,
 } from "../types";
-import { BASE_MCP_INSTRUCTIONS, createBuiltinModule, createBuiltinTools } from "./builtin-module";
+import { BASE_MCP_INSTRUCTIONS, INDEXED_MCP_INSTRUCTIONS, createBuiltinModule, createBuiltinTools } from "./builtin-module";
 import type { BuiltinModuleDeps } from "./builtin-module";
 
 export interface EcosystemDeps {
@@ -96,12 +109,24 @@ export class Ecosystem {
   readonly screens: ScreenService | undefined;
   /** The frozen facade handed to modules. */
   readonly api: AIEcosystemAPI;
+  /** Federated search over the tools.db of the registered modules (tools_find, tools_describe, tools_run). */
+  readonly toolIndex: ToolFederation;
   private readonly builtin: BuiltinModuleDeps;
+  /** <vault>/<configDir>/plugins/ai-ecosystem/tools.db, undefined without a vault folder or configDir. */
+  private readonly coreIndexFile: string | undefined;
   private disposed = false;
 
   constructor(private readonly deps: EcosystemDeps) {
     const getSecrets = (): SecretVaultService | undefined => this.bus.get<SecretVaultService>(SECRETS_SERVICE);
     this.redactor = createRedactor(getSecrets);
+    const indexPath = (moduleId: string): string | undefined =>
+      deps.vaultBasePath && deps.configDir ? toolIndexPath(deps.vaultBasePath, deps.configDir, moduleId) : undefined;
+    this.coreIndexFile = indexPath(ECOSYSTEM_ID);
+    this.toolIndex = new ToolFederation({
+      listModuleIds: () => this.registry.listModules().map((m) => m.id),
+      listTools: () => this.registry.listTools(),
+      indexPath,
+    });
     if (deps.vaultBasePath) {
       try {
         const dbPath = `${deps.vaultBasePath}/.obsidian/plugins/ai-ecosystem/activity.sqlite`;
@@ -121,6 +146,7 @@ export class Ecosystem {
       supportedApiVersions: SUPPORTED_API_VERSIONS,
       // Only reacts to changes. ProviderApi already emits the lifecycle events of modules.
       onChange: (change) => {
+        this.toolIndex.handleRegistryChange(change);
         if (change.type !== "prompts-changed") this.server.notifyListChanged("tools");
         if (change.type !== "tools-changed") this.server.notifyListChanged("prompts");
         this.hooks?.handleRegistryChange(change);
@@ -185,6 +211,9 @@ export class Ecosystem {
         getMcpInstructions: () => BASE_MCP_INSTRUCTIONS,
         isToolHidden: (registered, kind) => this.hooks?.isToolHidden(registered, kind) ?? false,
         onToolResult: (moduleId, isError) => this.hooks?.recordToolResult(moduleId, isError),
+        getToolExposure: (kind) => this.toolExposure(kind),
+        isListedWhenIndexed: (registered) => this.isListedWhenIndexed(registered),
+        getIndexedInstructions: () => INDEXED_MCP_INSTRUCTIONS,
         ...deps.serverOptions,
         onStatusChange: (status) => this.handleStatus(status),
       };
@@ -198,6 +227,14 @@ export class Ecosystem {
       activity: this.logger,
       importClients: deps.importClients,
       getServerStatus: () => this.server.getStatus(),
+      syncToolIndex:
+        deps.vaultBasePath && deps.configDir
+          ? async (moduleId, entries) => {
+              new ToolIndexWriter(toolIndexPath(deps.vaultBasePath, deps.configDir as string, moduleId)).sync(moduleId, entries);
+              // The file may be new: the federation attaches it on the next search.
+              this.toolIndex.invalidate();
+            }
+          : undefined,
     });
     this.api = createPublicApi(this.providerApi);
 
@@ -229,9 +266,51 @@ export class Ecosystem {
       },
       screens: this.screens,
       setup: this.setup,
+      discovery: {
+        federation: this.toolIndex,
+        findTool: (name) => this.registry.findTool(name),
+        getService: <T>(name: string) => this.bus.get<T>(name),
+        isHidden: (moduleId, tool, kind) => (kind ? (this.hooks?.isModuleHidden(moduleId, kind, tool?.availableDuringSetup === true) ?? false) : false),
+        onToolResult: (moduleId, isError) => this.hooks?.recordToolResult(moduleId, isError),
+      },
     };
     const registered = this.registry.register(createBuiltinModule(this.builtin));
     if (!registered.ok) console.error(`[AI Ecosystem] Could not register the built-in module: ${registered.reason}`);
+    this.syncCoreIndex();
+  }
+
+  /** The tools/list exposure of a kind of client (data.json; "completo" when unset). */
+  toolExposure(kind: ClientKind): ToolExposureMode {
+    return this.deps.getSettings().toolExposure?.modes[kind] === "indexado" ? "indexado" : "completo";
+  }
+
+  /**
+   * What stays in tools/list in "indexado" mode: the discovery tools, the tools marked exposicao
+   * "fixa", the fixed tools of the settings and, while a module (or the core) waits for its first
+   * setup, the setup tools that the setup skill calls.
+   */
+  isListedWhenIndexed(registered: RegisteredTool): boolean {
+    const { tool, moduleId } = registered;
+    if (DISCOVERY_TOOL_NAMES.includes(tool.name) || tool.exposicao === "fixa") return true;
+    const fixed = this.deps.getSettings().toolExposure?.fixedTools ?? DEFAULT_FIXED_TOOLS;
+    if (fixed.includes(tool.name)) return true;
+    if (!this.hooks?.isSetupPending()) return false;
+    return (moduleId === ECOSYSTEM_ID && tool.name.startsWith("ecosystem_setup_")) || tool.availableDuringSetup === true;
+  }
+
+  /** Writes the core's own tools.db (its tools without the discovery ones). Never throws. */
+  private syncCoreIndex(): void {
+    if (!this.coreIndexFile || this.disposed) return;
+    try {
+      const entries = this.registry
+        .listTools()
+        .filter((t) => t.moduleId === ECOSYSTEM_ID && !DISCOVERY_TOOL_NAMES.includes(t.tool.name))
+        .map((t) => toIndexEntry(t.tool));
+      new ToolIndexWriter(this.coreIndexFile).sync(ECOSYSTEM_ID, entries);
+      this.toolIndex.invalidate();
+    } catch (err) {
+      console.warn("[AI Ecosystem] Could not write the tool index of the core", err);
+    }
   }
 
   /**
@@ -258,6 +337,7 @@ export class Ecosystem {
       this.bus.clear();
       this.providerApi.dispose();
       this.engine.killAll();
+      this.toolIndex.close();
       this.database?.close();
     } catch (err) {
       console.warn("[AI Ecosystem] Error while unloading", err);
@@ -271,6 +351,7 @@ export class Ecosystem {
   private refreshBuiltinTools(): void {
     if (this.disposed || !this.registry.has(ECOSYSTEM_ID)) return;
     this.registry.updateTools(ECOSYSTEM_ID, createBuiltinTools(this.builtin));
+    this.syncCoreIndex();
   }
 
   private handleStatus(status: ServerStatus): void {

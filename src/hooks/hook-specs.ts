@@ -3,7 +3,7 @@
 import { ECOSYSTEM_ID } from "../types";
 
 export type HookEvent = "PreToolUse" | "PostToolUseFailure" | "SessionStart" | "UserPromptSubmit";
-export type HookType = "protecao" | "setup" | "falha" | "aprovacao";
+export type HookType = "protecao" | "setup" | "falha" | "aprovacao" | "execucao";
 
 export const HOOK_SCRIPT_NAME = "ai-ecosystem-hook.mjs";
 /** Seconds Claude Code waits for the script (a timeout never blocks the tool call). */
@@ -56,6 +56,21 @@ export const CORE_FAILURE_SPEC: HookSpec = {
   matcher: "mcp__.*",
 };
 
+/**
+ * The core's approval of tools_run: always on (whatever the modes), it reads the efeito and
+ * aprovacao of the tool being run from the tools.db files and makes Claude Code ask the user for
+ * efeito "externo" (and whenever it cannot tell). It never allows a call by itself.
+ */
+export const CORE_RUN_SPEC: HookSpec = {
+  module: ECOSYSTEM_ID,
+  type: "execucao",
+  event: "PreToolUse",
+  matcher: "mcp__.*__tools_run",
+};
+
+/** Every entry the core installs on its own (once Node.js is found). */
+export const CORE_SPECS: readonly HookSpec[] = [CORE_FAILURE_SPEC, CORE_RUN_SPEC];
+
 /** Ids of the modules that have a protection hook. */
 export function protectionModuleIds(): string[] {
   return Object.keys(PROTECTION_SPECS);
@@ -93,7 +108,7 @@ export interface ParsedCommand {
   type: HookType;
 }
 
-const COMMAND_PATTERN = /ai-ecosystem-hook\.mjs"?\s+([a-z0-9][a-z0-9-]*)\s+(protecao|setup|falha|aprovacao)(?=\s|$)/;
+const COMMAND_PATTERN = /ai-ecosystem-hook\.mjs"?\s+([a-z0-9][a-z0-9-]*)\s+(protecao|setup|falha|aprovacao|execucao)(?=\s|$)/;
 
 /** Reads "<module> <type>" from a plugin command. Undefined when the command is not ours. */
 export function parseCommand(command: unknown): ParsedCommand | undefined {

@@ -11,6 +11,7 @@ import type {
   HubToolResult,
   RegisteredTool,
   RegistryLookup,
+  ToolExposureMode,
 } from "../types";
 import { detectClientKind } from "./client-detector";
 import { sendJson } from "./http-utils";
@@ -52,6 +53,15 @@ export interface McpHostOptions {
   isToolHidden?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
   /** Called after every tools/call. Errors thrown here never affect the request. */
   onToolResult?: (moduleId: string, isError: boolean) => void;
+  /** tools/list exposure of a kind of client (default "completo": every tool). */
+  getToolExposure?: (clientKind: ClientKind) => ToolExposureMode;
+  /**
+   * In "indexado" mode, true for the tools that stay in tools/list (fixed tools and discovery).
+   * tools/call keeps accepting every tool by name in both modes.
+   */
+  isListedWhenIndexed?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
+  /** Appended to the instructions on initialize for a client in "indexado" mode. */
+  getIndexedInstructions?: () => string;
 }
 
 /** What one POST carries between the steps of its processing. */
@@ -258,12 +268,13 @@ export class McpHost {
         const clientInfo = params.clientInfo;
         const clientName = isObject(clientInfo) && typeof clientInfo.name === "string" ? clientInfo.name : undefined;
         state.newSessionId = this.createSession(clientName);
+        const kind = detectClientKind(clientName, client.name);
         return plain(
           {
             protocolVersion,
             capabilities: { tools: { listChanged: true }, prompts: { listChanged: true } },
             serverInfo: this.opts.serverInfo,
-            instructions: this.buildInstructions(),
+            instructions: this.buildInstructions(this.exposure(kind) === "indexado"),
           },
           { protocolVersion, serverInfo: this.opts.serverInfo },
           params,
@@ -274,7 +285,10 @@ export class McpHost {
         return plain({});
       case "tools/list": {
         const kind = this.clientKind(client, state);
-        const visible = this.opts.registry.listTools().filter((registered) => !this.isHidden(registered, kind));
+        const indexed = this.exposure(kind) === "indexado";
+        const visible = this.opts.registry
+          .listTools()
+          .filter((registered) => !this.isHidden(registered, kind) && (!indexed || this.isListedWhenIndexed(registered, kind)));
         const tools = visible.map(({ tool }) => {
           const out: Record<string, unknown> = { name: tool.name };
           if (tool.title !== undefined) out.title = tool.title;
@@ -391,9 +405,34 @@ export class McpHost {
     }
   }
 
-  private buildInstructions(): string {
-    const parts = [this.opts.getBaseInstructions(), ...this.opts.registry.listInstructions().map((i) => i.text)];
+  private buildInstructions(indexed: boolean): string {
+    const parts = [this.opts.getBaseInstructions(), ...(indexed ? [this.indexedInstructions()] : []), ...this.opts.registry.listInstructions().map((i) => i.text)];
     return parts.filter((p) => typeof p === "string" && p.trim() !== "").join("\n\n");
+  }
+
+  private indexedInstructions(): string {
+    try {
+      return this.opts.getIndexedInstructions?.() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** The exposure mode of a kind of client; any problem means "completo" (every tool listed). */
+  private exposure(kind: ClientKind): ToolExposureMode {
+    try {
+      return this.opts.getToolExposure?.(kind) === "indexado" ? "indexado" : "completo";
+    } catch {
+      return "completo";
+    }
+  }
+
+  private isListedWhenIndexed(registered: RegisteredTool, kind: ClientKind): boolean {
+    try {
+      return this.opts.isListedWhenIndexed?.(registered, kind) ?? true;
+    } catch {
+      return true;
+    }
   }
 
   // -------------------------------------------------------------------------

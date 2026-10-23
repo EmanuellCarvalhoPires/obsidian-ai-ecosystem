@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BASE_MCP_INSTRUCTIONS, buildStatus, createBuiltinModule, formatStatusText } from "../../src/core/builtin-module";
+import {
+  BASE_MCP_INSTRUCTIONS,
+  CORE_TOOL_METADATA,
+  INDEXED_MCP_INSTRUCTIONS,
+  buildStatus,
+  createBuiltinModule,
+  formatStatusText,
+  withCoreMetadata,
+} from "../../src/core/builtin-module";
 import type { BuiltinModuleDeps } from "../../src/core/builtin-module";
 import type { HubRequest, ModuleInfo, ServerStatus, ServiceInfo } from "../../src/types";
 
@@ -91,5 +99,38 @@ describe("built-in module", () => {
     expect(BASE_MCP_INSTRUCTIONS).toContain("ecosystem_status");
     expect(BASE_MCP_INSTRUCTIONS).toContain("ecosystem_run_script");
     expect(BASE_MCP_INSTRUCTIONS.split(". ").length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe("index metadata of the core tools", () => {
+  it("covers the 10 core tools with a category, a short summary and an effect", () => {
+    expect(Object.keys(CORE_TOOL_METADATA).sort()).toEqual([
+      "ecosystem_list_scripts",
+      "ecosystem_run_script",
+      "ecosystem_setup_complete",
+      "ecosystem_setup_save",
+      "ecosystem_setup_status",
+      "ecosystem_status",
+      "tela_criar",
+      "tela_editar",
+      "tela_listar",
+      "tela_remover",
+    ]);
+    for (const [name, meta] of Object.entries(CORE_TOOL_METADATA)) {
+      expect(meta.categoria, name).toBeTruthy();
+      expect(meta.efeito, name).toMatch(/^(leitura|cofre|externo)$/);
+      expect((meta.resumo ?? "").length, name).toBeLessThanOrEqual(100);
+      expect(meta.tags?.length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("adds the metadata to the built-in tools, screen tools included, without replacing a tool's own", () => {
+    const tools = createBuiltinModule(deps()).tools ?? [];
+    expect(tools.find((t) => t.name === "ecosystem_run_script")).toMatchObject({ categoria: "scripts", efeito: "externo" });
+    const screen = withCoreMetadata({ name: "tela_cadastro", description: "x", inputSchema: {}, handler: async () => ({ content: [] }) });
+    expect(screen).toMatchObject({ categoria: "telas", efeito: "cofre" });
+    const own = withCoreMetadata({ name: "ecosystem_status", description: "x", inputSchema: {}, efeito: "cofre", handler: async () => ({ content: [] }) });
+    expect(own.efeito).toBe("cofre");
+    expect(INDEXED_MCP_INSTRUCTIONS).toContain("tools_find");
   });
 });

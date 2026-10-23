@@ -39,6 +39,8 @@ export interface SettingsHost extends HooksSettingsHost {
   createClient(name: string): Promise<{ record: ClientRecord; token: string }>;
   revokeClient(id: string): Promise<void>;
   onInterpretersChanged(): void;
+  /** The tool exposure changed: the MCP clients are told to read tools/list again. */
+  onToolExposureChanged?(): void;
   openInspector(): Promise<void>;
   openCatalog(): Promise<void>;
   /** The saved screens, or undefined when screens are not available in this vault. */
@@ -88,6 +90,7 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     await this.host.saveSettings();
     if (effects.includes("restart-server")) this.host.scheduleServerRestart();
     if (effects.includes("interpreters")) this.host.onInterpretersChanged();
+    if (effects.includes("tool-exposure")) this.host.onToolExposureChanged?.();
   }
 
   display(): void {
@@ -101,6 +104,7 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     this.renderDangerGroup(containerEl);
     this.renderInspectorGroup(containerEl);
     this.renderModulesGroup(containerEl);
+    this.renderToolExposureGroup(containerEl);
     renderHooksGroup(containerEl, this.app, this.host, () => this.display());
     this.renderScreensGroup(containerEl);
     this.renderServicesGroup(containerEl);
@@ -196,6 +200,38 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     if (!isValidPort(value)) return t("settings.error.port", { min: MIN_PORT, max: MAX_PORT });
     if (value === other) return t("settings.error.portSame");
     return undefined;
+  }
+
+  // ---- tool exposure --------------------------------------------------------
+
+  private renderToolExposureGroup(containerEl: HTMLElement): void {
+    new Setting(containerEl).setHeading().setName(t("settings.exposure.heading"));
+    const kinds = [
+      { kind: "claude-code", label: "settings.exposure.claude" },
+      { kind: "antigravity", label: "settings.exposure.antigravity" },
+      { kind: "other", label: "settings.exposure.other" },
+    ] as const;
+    for (const item of kinds) {
+      const key = `toolExposure.${item.kind}`;
+      new Setting(containerEl)
+        .setName(t(item.label))
+        .setDesc(t("settings.exposure.modeDesc"))
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOption("completo", t("settings.exposure.full"))
+            .addOption("indexado", t("settings.exposure.indexed"))
+            .setValue(String(readSetting(this.host.settings, key)))
+            .onChange((value) => void this.setControlValue(key, value)),
+        );
+    }
+    new Setting(containerEl)
+      .setName(t("settings.exposure.fixed"))
+      .setDesc(t("settings.exposure.fixedDesc"))
+      .addText((text) =>
+        text
+          .setValue(String(readSetting(this.host.settings, "toolExposure.fixedTools")))
+          .onChange((value) => void this.setControlValue("toolExposure.fixedTools", value)),
+      );
   }
 
   // ---- clients ------------------------------------------------------------

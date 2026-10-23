@@ -92,6 +92,17 @@ export const settingsStrings: StringTable = {
     "settings.services.empty": "No services available.",
     "settings.services.owner": "Provided by {owner}",
 
+    "settings.exposure.heading": "Tool exposure",
+    "settings.exposure.modeDesc":
+      "Full lists every tool. Indexed lists only the fixed tools and tools_find, tools_describe and tools_run; the other tools are found with tools_find and run with tools_run. Calls by name keep working in both modes.",
+    "settings.exposure.claude": "Claude Code",
+    "settings.exposure.antigravity": "Antigravity",
+    "settings.exposure.other": "Other clients",
+    "settings.exposure.full": "Full",
+    "settings.exposure.indexed": "Indexed",
+    "settings.exposure.fixed": "Fixed tools",
+    "settings.exposure.fixedDesc": "Tools that stay in the list in indexed mode, separated by commas.",
+
     "settings.hooks.heading": "Claude Code hooks",
     "settings.hooks.intro":
       "Hooks keep Claude Code on the tools of the installed modules: a search or shell command the module covers is redirected to its tool. The entries go into the Claude Code settings of this vault and never replace your own.",
@@ -241,6 +252,17 @@ export const settingsStrings: StringTable = {
     "settings.services.heading": "Serviços",
     "settings.services.empty": "Nenhum serviço disponível.",
     "settings.services.owner": "Fornecido por {owner}",
+
+    "settings.exposure.heading": "Exposição das tools",
+    "settings.exposure.modeDesc":
+      "Completo lista todas as tools. Indexado lista só as tools fixas e tools_find, tools_describe e tools_run; as outras são encontradas com tools_find e executadas com tools_run. A chamada pelo nome continua valendo nos dois modos.",
+    "settings.exposure.claude": "Claude Code",
+    "settings.exposure.antigravity": "Antigravity",
+    "settings.exposure.other": "Outros clientes",
+    "settings.exposure.full": "Completo",
+    "settings.exposure.indexed": "Indexado",
+    "settings.exposure.fixed": "Tools fixas",
+    "settings.exposure.fixedDesc": "Tools que continuam na lista no modo indexado, separadas por vírgula.",
 
     "settings.hooks.heading": "Hooks do Claude Code",
     "settings.hooks.intro":

@@ -90,6 +90,9 @@ describe("screens in the AI Ecosystem", () => {
       "ecosystem_status",
       "ecosystem_list_scripts",
       "ecosystem_run_script",
+      "tools_find",
+      "tools_describe",
+      "tools_run",
       "tela_criar",
       "tela_listar",
       "tela_editar",
@@ -204,6 +207,13 @@ describe("without a screen host", () => {
     });
     running.push(eco);
     expect(eco.screens).toBeUndefined();
-    expect(eco.registry.listTools().map((t) => t.tool.name)).toEqual(["ecosystem_status", "ecosystem_list_scripts", "ecosystem_run_script"]);
+    expect(eco.registry.listTools().map((t) => t.tool.name)).toEqual([
+      "ecosystem_status",
+      "ecosystem_list_scripts",
+      "ecosystem_run_script",
+      "tools_find",
+      "tools_describe",
+      "tools_run",
+    ]);
   });
 });

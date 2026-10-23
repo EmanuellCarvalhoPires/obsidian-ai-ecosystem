@@ -352,18 +352,33 @@ describe("module setup states", () => {
 });
 
 describe("protection hooks of a module", () => {
+  /** The PreToolUse groups of the modules (the core's own tools_run approval left out). */
+  const modulePre = (): any[] => (settings()?.hooks?.PreToolUse ?? []).filter((g: any) => !String(g.hooks[0].command).endsWith(" ai-ecosystem execucao"));
+
+  it("installs the core approval of tools_run next to the failure entry", async () => {
+    const manager = await started();
+    const pre = settings().hooks.PreToolUse;
+    expect(pre).toEqual([
+      {
+        matcher: "mcp__.*__tools_run",
+        hooks: [{ type: "command", command: `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-ecosystem execucao`, timeout: 10 }],
+      },
+    ]);
+    expect(manager.getStatus().coreRunApprovalInstalled).toBe(true);
+  });
+
   it("installs on request, once, and removes from both settings files", async () => {
     registry.add("ai-templates");
     const manager = await started();
     // The module is legacy, so the core already installed the entry.
     expect(await manager.installProtection("ai-templates")).toEqual({ ok: true, changed: false });
-    expect(settings().hooks.PreToolUse).toHaveLength(1);
+    expect(modulePre()).toHaveLength(1);
     expect(manager.getStatus().modules[0]!.installed).toHaveLength(1);
 
     expect(manager.removeModule("ai-templates")).toEqual({ ok: true, changed: true });
     expect(await manager.installProtection("ai-templates")).toEqual({ ok: true, changed: true });
     expect(manager.removeModule("ai-templates")).toEqual({ ok: true, changed: true });
-    expect(settings().hooks.PreToolUse).toBeUndefined();
+    expect(modulePre()).toHaveLength(0);
     expect(manager.getStatus().modules[0]!.installed).toHaveLength(0);
   });
 
@@ -374,20 +389,22 @@ describe("protection hooks of a module", () => {
     await manager.whenReady();
     manager.setMode("ai-git-tools", "off");
     expect(await manager.installProtection("ai-git-tools")).toMatchObject({ ok: true });
-    const pre = settings().hooks.PreToolUse;
+    const pre = modulePre();
     expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Bash|PowerShell", "mcp__.*__git_pr_merge"]);
     expect(pre[1].hooks[0].command).toContain("ai-git-tools aprovacao");
     expect(state("config.json").modos["ai-git-tools"]).toBe("off");
 
     // Reapplying does not duplicate anything.
     expect(await manager.installProtection("ai-git-tools")).toEqual({ ok: true, changed: false });
-    expect(settings().hooks.PreToolUse).toHaveLength(2);
+    expect(modulePre()).toHaveLength(2);
     const row = manager.getStatus().modules.find((m) => m.id === "ai-git-tools")!;
     expect(row.installed.map((e) => e.type).sort()).toEqual(["aprovacao", "protecao"]);
     expect(row.mode).toBe("off");
 
     expect(manager.removeModule("ai-git-tools")).toEqual({ ok: true, changed: true });
-    expect(settings().hooks.PreToolUse).toBeUndefined();
+    expect(modulePre()).toHaveLength(0);
+    // The core's own entries stay.
+    expect(JSON.stringify(settings())).toContain("ai-ecosystem execucao");
   });
 
   it("writes the default mode avisar of AI Git Tools explicitly, and plans both entries", async () => {

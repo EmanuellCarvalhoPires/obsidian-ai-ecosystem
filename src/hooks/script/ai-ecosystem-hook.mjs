@@ -2,12 +2,13 @@
 //
 // Written by the AI Ecosystem plugin to <vault>/.claude/ai-ecosystem/hooks/ and registered
 // in the Claude Code settings. Types: protecao (PreToolUse), setup (SessionStart, UserPromptSubmit), falha
-// (PostToolUseFailure), aprovacao (PreToolUse of git_pr_merge). Plain Node, no dependencies, no network.
+// (PostToolUseFailure), aprovacao (PreToolUse of git_pr_merge), execucao (PreToolUse of tools_run).
+// Plain Node, no dependencies, no network (execucao reads the tools.db files with node:sqlite).
 //
 // This script must never get in the way of the agent: any problem (missing or invalid state
 // file, unexpected input, exception, more than 2 seconds) ends with exit code 0 and no
-// output, which lets the tool call proceed. The one exception is the type aprovacao: it never
-// fails open, any problem there still makes Claude Code ask the user.
+// output, which lets the tool call proceed. The exceptions are the types aprovacao and execucao:
+// they never fail open, any problem there still makes Claude Code ask the user.
 //
 // The script never answers permissionDecision "allow": that would approve the call and skip the
 // normal Claude Code permission prompt. A reminder (mode avisar, repetition lock) goes out as
@@ -22,8 +23,13 @@ const FAILURE_TTL_MS = 10 * 60_000;
 const LOCK_WINDOW_MS = 10 * 60_000;
 const LOCK_PASS_ATTEMPT = 3;
 const WINDOWS = process.platform === "win32";
-const APPROVAL = process.argv[3] === "aprovacao";
+const TYPE = process.argv[3];
 const GENERIC_APPROVAL = "Posso fazer o merge deste PR?";
+const GENERIC_RUN = "Posso executar esta tool pelo tools_run?";
+/** aprovacao values with a fixed meaning (anything else is a question template). */
+const APPROVAL_REQUIRED = "obrigatoria";
+const APPROVAL_WAIVED = "dispensada";
+const TOOL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** Mode of a module with no entry in config.modos (same table as defaultMode in state-dir.ts). */
 const DEFAULT_MODES = { "ai-git-tools": "avisar" };
@@ -50,13 +56,21 @@ const GIT_HOSTS = ["api.github.com", "github.com", "api.bitbucket.org", "bitbuck
 // Entry point
 // ---------------------------------------------------------------------------
 
-/** Ends the process without output (the call proceeds). For aprovacao it asks the user instead. */
+/** Ends the process without output (the call proceeds). For aprovacao and execucao it asks the user instead. */
 function allow() {
-  if (APPROVAL) return askApproval(GENERIC_APPROVAL);
+  if (TYPE === "aprovacao") return askApproval(GENERIC_APPROVAL);
+  if (TYPE === "execucao") return askApproval(GENERIC_RUN);
   process.exit(0);
 }
 
 let answered = false;
+
+/** No decision and no output: the user's normal permission rules decide (used by execucao). */
+function pass() {
+  if (answered) return;
+  answered = true;
+  process.exit(0);
+}
 
 /** Prints one JSON line and ends. Falls back to exit 0 if the write fails. */
 function respond(output) {
@@ -89,6 +103,10 @@ function main() {
       if (type === "setup") return setup(stateDir, moduleId, input);
       if (type === "falha") return failure(stateDir, input);
       if (type === "aprovacao") return approval(input);
+      if (type === "execucao") {
+        execution(stateDir, input).catch(() => allow());
+        return;
+      }
     } catch {
       // Fail open.
     }
@@ -216,11 +234,133 @@ function protect(stateDir, moduleId, input) {
 
 /** Always asks: the mode of the module, the heartbeat and the setup state do not matter here. */
 function approval(input) {
-  const toolInput = isObject(input.tool_input) ? input.tool_input : {};
+  askApproval(mergeQuestion(isObject(input.tool_input) ? input.tool_input : {}));
+}
+
+/** The merge question with the PR number and destination of the call, or the generic one. */
+function mergeQuestion(toolInput) {
   const numero = prNumber(toolInput.numero);
   const destino = typeof toolInput.destino === "string" ? toolInput.destino.trim() : "";
-  if (numero === undefined || destino === "" || destino.length > 255 || /[\r\n]/.test(destino)) return askApproval(GENERIC_APPROVAL);
-  askApproval(`Posso fazer o merge do PR #${numero} para a branch ${destino}?`);
+  if (numero === undefined || destino === "" || destino.length > 255 || /[\r\n]/.test(destino)) return GENERIC_APPROVAL;
+  return `Posso fazer o merge do PR #${numero} para a branch ${destino}?`;
+}
+
+// ---------------------------------------------------------------------------
+// execucao (PreToolUse of tools_run)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the efeito and aprovacao of the tool being run from the tools.db files. "externo" (or an
+ * aprovacao policy) asks the user; "leitura" and "cofre" make no decision, so the user's normal
+ * permission rules apply. An unknown id, a missing index or any problem asks (never fails open).
+ */
+async function execution(stateDir, input) {
+  const toolInput = isObject(input.tool_input) ? input.tool_input : {};
+  const id = typeof toolInput.id === "string" ? toolInput.id.trim() : "";
+  if (!TOOL_ID.test(id)) return askApproval(GENERIC_RUN);
+  const args = toolArgs(toolInput.args);
+  // The merge question of AI Git Tools also holds through tools_run, whatever the index says.
+  if (id === "git_pr_merge") return askApproval(mergeQuestion(args));
+  const row = await findIndexedTool(stateDir, id);
+  if (!row) return askApproval(`Posso executar ${id} pelo tools_run? Essa tool não está em nenhum índice (tools.db), então o efeito dela é desconhecido.`);
+  const question = runQuestion(id, row, args);
+  if (question) return askApproval(question);
+  pass();
+}
+
+/** The arguments of a tools_run call (an object, or JSON text of one). */
+function toolArgs(value) {
+  if (isObject(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (isObject(parsed)) return parsed;
+    } catch {
+      // Not JSON.
+    }
+  }
+  return {};
+}
+
+/** The question to ask for this tool, or undefined to make no decision. */
+function runQuestion(id, row, args) {
+  const policy = typeof row.aprovacao === "string" ? row.aprovacao.trim() : "";
+  if (policy === APPROVAL_WAIVED) return undefined;
+  const harmless = row.efeito === "leitura" || row.efeito === "cofre";
+  if (policy === "" && harmless) return undefined;
+  if (policy !== "" && policy !== APPROVAL_REQUIRED) {
+    const filled = fillTemplate(policy, args);
+    if (filled) return filled;
+  }
+  return `Posso executar ${id} (módulo ${oneLine(row.moduleId, 64)}, efeito ${oneLine(row.efeito, 16)})?`;
+}
+
+/** Fills {name} with the argument values; undefined when one is missing or not a plain value. */
+function fillTemplate(template, args) {
+  let missing = false;
+  const out = template.replace(/\{([A-Za-z0-9_]+)\}/g, (_, key) => {
+    const value = plainValue(args[key]);
+    if (value === undefined) missing = true;
+    return value ?? "";
+  });
+  if (missing || /[\r\n]/.test(out) || out.length > 300) return undefined;
+  return out;
+}
+
+function plainValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "boolean") return String(value);
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text === "" || text.length > 200 || /[\r\n]/.test(text) ? undefined : text;
+}
+
+function oneLine(value, max) {
+  const text = String(value ?? "?").replace(/[\r\n]+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text || "?";
+}
+
+/** The index row of a tool: the module of tools.json first, then every plugin folder with a tools.db. */
+async function findIndexedTool(stateDir, id) {
+  const config = readJson(stateDir, "config.json");
+  if (!isObject(config) || typeof config.vaultPath !== "string" || config.vaultPath === "") return undefined;
+  const configDir = typeof config.configDir === "string" && config.configDir !== "" ? config.configDir : ".obsidian";
+  const pluginsDir = path.join(config.vaultPath, configDir, "plugins");
+  let dirs;
+  try {
+    dirs = fs.readdirSync(pluginsDir);
+  } catch {
+    return undefined;
+  }
+  const tools = readJson(stateDir, "tools.json");
+  const owner = isObject(tools) && typeof tools[id] === "string" ? tools[id] : undefined;
+  const ordered = owner ? [owner, ...dirs.filter((d) => d !== owner)] : dirs;
+  let sqlite;
+  try {
+    sqlite = await import("node:sqlite");
+  } catch {
+    return undefined; // Node.js without node:sqlite: the caller asks.
+  }
+  for (const dir of ordered) {
+    if (!/^[A-Za-z0-9._-]+$/.test(dir) || dir === "." || dir === "..") continue;
+    const file = path.join(pluginsDir, dir, "tools.db");
+    if (!fs.existsSync(file)) continue;
+    let db;
+    try {
+      db = new sqlite.DatabaseSync(file, { readOnly: true });
+      const row = db.prepare("SELECT module_id, efeito, aprovacao FROM tools WHERE name = ?").get(id);
+      if (row) return { moduleId: String(row.module_id), efeito: String(row.efeito), aprovacao: typeof row.aprovacao === "string" ? row.aprovacao : null };
+    } catch {
+      // Not a usable index: try the next one.
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+  return undefined;
 }
 
 function prNumber(value) {
@@ -284,7 +424,23 @@ function vaultSearchRule(toolName, toolInput, env) {
   const guarded = [".claude", env.configDir];
   if (guarded.some((dir) => insideFolder(segments, dir))) return undefined;
   if (outside.some((glob) => insideFolder(segments, glob))) return undefined;
-  return MESSAGES["ai-vault-search"];
+  return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`;
+}
+
+/** The ready call that replaces a Grep (search_notes) or a Glob (list_files through tools_run). */
+function vaultSearchCall(toolName, toolInput, folder) {
+  if (toolName === "Glob") {
+    const args = folder ? { pasta: folder, recursivo: true } : { recursivo: true };
+    return `Chamada pronta: tools_run ${JSON.stringify({ id: "list_files", args })} (para buscar por conteúdo, search_notes).`;
+  }
+  const termos = searchTerms(typeof toolInput.pattern === "string" ? toolInput.pattern : "");
+  return `Chamada pronta: search_notes ${JSON.stringify(termos.length ? { termos } : {})}.`;
+}
+
+/** The plain words of a regular expression (escapes like \s and \b dropped), at most 6. */
+function searchTerms(pattern) {
+  const words = pattern.replace(/\\[A-Za-z]/g, " ").match(/[\p{L}\p{N}]{2,}/gu) ?? [];
+  return [...new Set(words)].slice(0, 6);
 }
 
 /** The part of a glob pattern before its first wildcard segment. */
@@ -308,9 +464,21 @@ function envKeysRule(toolName, toolInput, env) {
   const patterns = isObject(hosts) ? stringList(hosts.hosts) : [];
   if (patterns.length === 0) return undefined;
   for (const url of extractUrls(command)) {
-    if (patterns.some((pattern) => hostMatches(pattern, url))) return MESSAGES["environment-variables"];
+    if (patterns.some((pattern) => hostMatches(pattern, url))) return `${MESSAGES["environment-variables"]} ${httpCalls(command, url)}`;
   }
   return undefined;
+}
+
+/** The ready calls for an HTTP request to a host with a secret: look for its vault tool, else http_request. */
+function httpCalls(command, url) {
+  const method = /(?:^|\s)(?:-X|--request|-Method)\s+['"]?([A-Za-z]+)/i.exec(command)?.[1]?.toUpperCase() ?? "GET";
+  const words = [url.hostname.split(".")[0], ...url.pathname.split(/[^A-Za-z]+/).filter((w) => w.length > 2 && !/^v\d*$/i.test(w))].slice(0, 5);
+  const href = url.href.length > 300 ? `${url.origin}${url.pathname}`.slice(0, 300) : url.href;
+  const request = { id: "http_request", args: { method, url: href, headers: { Authorization: "{{secret:NOME}}" } } };
+  return (
+    `Chamadas prontas: tools_find ${JSON.stringify({ q: words.join(" ") })} para achar a tool do endpoint e tools_run com o id dela; ` +
+    `sem tool própria: tools_run ${JSON.stringify(request)} (troque NOME pela secret certa, veja list_secrets).`
+  );
 }
 
 /** The lowercase words of a command (or of one segment of it), without quotes and shell punctuation. */
@@ -361,13 +529,73 @@ function gitRule(toolName, toolInput) {
   for (const segment of splitCommands(command)) {
     // The quote-aware tokens catch a quoted path with spaces ("C:/Program Files/Git/bin/git.exe").
     const quoted = tokenize(segment).map((token) => token.toLowerCase());
-    if (runsGit(commandWords(segment)) || runsGit(quoted)) return MESSAGES["ai-git-tools"];
+    for (const words of [commandWords(segment), quoted]) {
+      if (runsGit(words)) return `${MESSAGES["ai-git-tools"]} ${gitCall(words)}`;
+    }
   }
   if (!hasHttpCommand(command)) return undefined;
   for (const url of extractUrls(command)) {
-    if (GIT_HOSTS.includes(url.hostname.toLowerCase())) return MESSAGES["ai-git-tools"];
+    if (GIT_HOSTS.includes(url.hostname.toLowerCase())) {
+      return `${MESSAGES["ai-git-tools"]} Chamada pronta: tools_find ${JSON.stringify({ modulo: "ai-git-tools", q: url.pathname.includes("pull") ? "pr" : "git" })}.`;
+    }
   }
   return undefined;
+}
+
+/** The AI Git Tools tool of a git subcommand (or of "gh <group> <action>"). */
+const GIT_TOOLS = {
+  status: "git_status",
+  diff: "git_diff",
+  log: "git_log",
+  blame: "git_blame",
+  branch: "git_branches",
+  add: "git_add",
+  commit: "git_commit",
+  push: "git_push",
+  pull: "git_pull",
+  fetch: "git_fetch",
+  checkout: "git_checkout",
+  switch: "git_checkout",
+  merge: "git_merge",
+  revert: "git_revert",
+  stash: "git_stash",
+  tag: "git_tag",
+  clone: "git_clone",
+  remote: "git_remote_info",
+};
+const GH_TOOLS = {
+  "pr create": "git_pr_criar",
+  "pr list": "git_pr_listar",
+  "pr view": "git_pr_obter",
+  "pr comment": "git_pr_comentar",
+  "pr merge": "git_pr_merge",
+  "release create": "git_release_criar",
+  "repo create": "git_repo_criar",
+  "run list": "git_pipeline_status",
+  "run view": "git_pipeline_status",
+};
+/** Tools that run fine without arguments. */
+const GIT_NO_ARGS = new Set(["git_status", "git_diff", "git_log", "git_branches", "git_remote_info", "git_fetch"]);
+
+/** The ready call for a git or gh command line (its words, lowercase). */
+function gitCall(words) {
+  let i = 0;
+  while (i < words.length && /^[a-z_][a-z0-9_]*=/.test(words[i])) i++;
+  const head = (words[i] ?? "").split(/[\\/]/).pop().replace(/\.exe$/, "");
+  const rest = [];
+  for (let j = i + 1; j < words.length; j++) {
+    const word = words[j];
+    // git -C <dir> / -c <key=value> take a value.
+    if (word === "-c" || word === "-C") {
+      j++;
+      continue;
+    }
+    if (!word.startsWith("-")) rest.push(word);
+  }
+  const id = head === "gh" ? GH_TOOLS[`${rest[0] ?? ""} ${rest[1] ?? ""}`] : GIT_TOOLS[rest[0] ?? ""];
+  if (!id) return `Chamada pronta: tools_find ${JSON.stringify({ modulo: "ai-git-tools" })}.`;
+  if (GIT_NO_ARGS.has(id)) return `Chamada pronta: tools_run ${JSON.stringify({ id, args: {} })}.`;
+  return `Chamada pronta: tools_run {"id":"${id}","args":{...}} (os parâmetros aparecem em tools_find ${JSON.stringify({ q: id })}).`;
 }
 
 /** True when the words start (after VAR=value assignments) with git or gh, and it is not a help command. */
@@ -398,12 +626,16 @@ function scriptsRule(toolName, toolInput, env) {
       cwd = moved;
       continue;
     }
-    const file = scriptFile(tokens);
-    if (!file) continue;
-    const rel = relativeToVault(normalizePath(file, cwd), env.vault);
+    const script = scriptFile(tokens);
+    if (!script) continue;
+    const rel = relativeToVault(normalizePath(script.file, cwd), env.vault);
     if (rel === undefined) continue;
     const segments = rel.split("/");
-    if (folders.some((glob) => insideFolder(segments.slice(0, -1), glob))) return MESSAGES["ai-scripts"];
+    if (folders.some((glob) => insideFolder(segments.slice(0, -1), glob))) {
+      const args = { path: relativeKeepCase(script.file, { ...env, cwd }) ?? rel };
+      if (script.args.length > 0) args.args = script.args;
+      return `${MESSAGES["ai-scripts"]} Chamada pronta: tools_run ${JSON.stringify({ id: "ecosystem_run_script", args })}.`;
+    }
   }
   return undefined;
 }
@@ -447,24 +679,25 @@ function changeDirectory(tokens, cwd) {
   return undefined;
 }
 
-/** The script file a "python x.py" style command runs, or undefined. */
+/** The script file a "python x.py" style command runs, with the arguments after it, or undefined. */
 function scriptFile(tokens) {
   let i = 0;
   while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || tokens[i] === "&")) i++;
   const runner = (tokens[i] ?? "").replace(/\\/g, "/").split("/").pop().toLowerCase().replace(/\.exe$/, "");
   if (!SCRIPT_RUNNERS.includes(runner)) return undefined;
 
+  const found = (j) => (tokens[j] ? { file: tokens[j], args: tokens.slice(j + 1) } : undefined);
   const powershell = runner === "pwsh" || runner === "powershell";
   for (let j = i + 1; j < tokens.length; j++) {
     const token = tokens[j];
     const lower = token.toLowerCase();
     if (powershell) {
-      if (lower === "-file" || lower === "-f") return tokens[j + 1];
-      if (!token.startsWith("-") && lower.endsWith(".ps1")) return token;
+      if (lower === "-file" || lower === "-f") return found(j + 1);
+      if (!token.startsWith("-") && lower.endsWith(".ps1")) return found(j);
       continue;
     }
     if (token === "-m" || token === "-c" || token === "-e" || token === "--eval" || token === "--print") return undefined;
-    if (!token.startsWith("-")) return token;
+    if (!token.startsWith("-")) return found(j);
   }
   return undefined;
 }
@@ -481,7 +714,9 @@ function templatesRule(toolName, toolInput, env) {
   const globs = isObject(pastas) ? stringList(pastas.templates) : [];
   if (!globs.some((glob) => matchGlob(rel.split("/"), glob))) return undefined;
   if (fs.existsSync(filePath)) return undefined;
-  return MESSAGES["ai-templates"];
+  const target = relativeKeepCase(filePath, env) ?? rel;
+  const call = { id: "create_note_from_template", args: { template_id: "<molde>", data: {}, target_path: target } };
+  return `${MESSAGES["ai-templates"]} Chamadas prontas: tools_find ${JSON.stringify({ kind: "template" })} para achar o molde e tools_run ${JSON.stringify(call)}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -492,15 +727,24 @@ function isAbsolutePath(p) {
   return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("/") || p.startsWith("\\\\");
 }
 
-/** Absolute, forward-slash path without "." / ".." segments (lowercase on Windows). */
-function normalizePath(p, cwd) {
+/** Absolute, forward-slash path without "." / ".." segments (lowercase on Windows unless keepCase). */
+function normalizePath(p, cwd, keepCase = false) {
   let value = p.replace(/\\/g, "/");
   // Git Bash style drive paths (/c/Users/x) on Windows.
   if (WINDOWS) value = value.replace(/^\/([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:`);
   if (!isAbsolutePath(value)) value = `${cwd.replace(/\\/g, "/")}/${value}`;
   let out = path.posix.normalize(value);
   if (out.length > 1) out = out.replace(/\/+$/, "");
-  return WINDOWS ? out.toLowerCase() : out;
+  return WINDOWS && !keepCase ? out.toLowerCase() : out;
+}
+
+/** The vault-relative path with its own letter case ("" for the vault, undefined outside it). */
+function relativeKeepCase(p, env) {
+  const abs = normalizePath(p, env.cwd, true);
+  const compared = WINDOWS ? abs.toLowerCase() : abs;
+  if (compared === env.vault) return "";
+  if (compared.length === abs.length && compared.startsWith(`${env.vault}/`)) return abs.slice(env.vault.length + 1);
+  return undefined;
 }
 
 /** The path relative to the vault, "" for the vault itself, undefined when it is outside. */
@@ -606,7 +850,9 @@ function failure(stateDir, input) {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
   const parts = toolName.split("__");
   if (parts.length < 3 || parts[0] !== "mcp") return allow();
-  const tool = parts.slice(2).join("__");
+  let tool = parts.slice(2).join("__");
+  // A failure inside tools_run belongs to the module of the tool it ran.
+  if (tool === "tools_run" && isObject(input.tool_input) && typeof input.tool_input.id === "string") tool = input.tool_input.id.trim();
   const tools = readJson(stateDir, "tools.json");
   const moduleId = isObject(tools) ? tools[tool] : undefined;
   if (typeof moduleId !== "string") return allow();

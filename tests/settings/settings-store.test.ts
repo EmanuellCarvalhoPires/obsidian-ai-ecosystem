@@ -53,8 +53,29 @@ describe("normalizeSettings", () => {
       },
       inspector: { maxEntries: 1000 },
       screens: { maxScreens: 12 },
+      toolExposure: { modes: { "claude-code": "indexado", antigravity: "completo", other: "completo" }, fixedTools: ["search_notes"] },
     };
     expect(normalizeSettings(valid)).toEqual(valid);
+  });
+
+  it("normalizes the tool exposure: unknown modes fall back to completo, tool names are cleaned", () => {
+    expect(normalizeSettings({}).toolExposure).toEqual({
+      modes: { "claude-code": "completo", antigravity: "completo", other: "completo" },
+      fixedTools: ["search_notes", "get_section"],
+    });
+    const odd = normalizeSettings({ toolExposure: { modes: { "claude-code": "x", other: "indexado" }, fixedTools: ["a", "a", "bad name", 3, "b"] } });
+    expect(odd.toolExposure).toEqual({ modes: { "claude-code": "completo", antigravity: "completo", other: "indexado" }, fixedTools: ["a", "b"] });
+  });
+
+  it("reads and writes the tool exposure controls and reports the effect", () => {
+    const settings = normalizeSettings({});
+    expect(readSetting(settings, "toolExposure.claude-code")).toBe("completo");
+    expect(writeSetting(settings, "toolExposure.claude-code", "indexado")).toEqual(["tool-exposure"]);
+    expect(writeSetting(settings, "toolExposure.claude-code", "indexado")).toEqual([]);
+    expect(writeSetting(settings, "toolExposure.claude-code", "nope")).toEqual([]);
+    expect(settings.toolExposure.modes["claude-code"]).toBe("indexado");
+    expect(writeSetting(settings, "toolExposure.fixedTools", "search_notes, get_section telegram_ask_approval")).toEqual(["tool-exposure"]);
+    expect(readSetting(settings, "toolExposure.fixedTools")).toBe("search_notes, get_section, telegram_ask_approval");
   });
 
   it("validates ports (integers from 1024 to 65535, port 0 refused)", () => {

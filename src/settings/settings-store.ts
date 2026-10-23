@@ -1,6 +1,14 @@
 // Loads and normalizes data.json. Never throws: garbage in, defaults out.
 import { DEFAULT_SETTINGS, SCRIPT_LANGUAGES } from "../types";
-import type { AIEcosystemSettings, ClientRecord, ScriptLanguage, ScriptSettings } from "../types";
+import type {
+  AIEcosystemSettings,
+  ClientKind,
+  ClientRecord,
+  ScriptLanguage,
+  ScriptSettings,
+  ToolExposureMode,
+  ToolExposureSettings,
+} from "../types";
 
 export const MIN_PORT = 1024;
 export const MAX_PORT = 65535;
@@ -108,6 +116,35 @@ function normalizeScripts(value: unknown): ScriptSettings {
   };
 }
 
+const CLIENT_KINDS: readonly ClientKind[] = ["claude-code", "antigravity", "other"];
+const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function exposureMode(value: unknown): ToolExposureMode | undefined {
+  return value === "completo" || value === "indexado" ? value : undefined;
+}
+
+/** Tool names from a list or from comma/space separated text, without duplicates. */
+export function parseToolNames(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\s,;]+/) : [];
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item !== "string") continue;
+    const name = item.trim();
+    if (TOOL_NAME.test(name) && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+function normalizeExposure(value: unknown): ToolExposureSettings {
+  const raw = isRecord(value) ? value : {};
+  const modes = isRecord(raw.modes) ? raw.modes : {};
+  const defaults = DEFAULT_SETTINGS.toolExposure;
+  const out: ToolExposureSettings = { modes: { ...defaults.modes }, fixedTools: [...defaults.fixedTools] };
+  for (const kind of CLIENT_KINDS) out.modes[kind] = exposureMode(modes[kind]) ?? defaults.modes[kind];
+  if (Array.isArray(raw.fixedTools)) out.fixedTools = parseToolNames(raw.fixedTools);
+  return out;
+}
+
 function pickAlternativePort(port: number, raw: unknown): number {
   if (isValidPort(raw) && raw !== port) return raw;
   const fallback = DEFAULT_SETTINGS.alternativePort;
@@ -135,6 +172,7 @@ export function normalizeSettings(raw: unknown): AIEcosystemSettings {
     screens: {
       maxScreens: clampInt(screens.maxScreens, MIN_SCREENS, MAX_SCREENS, DEFAULT_SETTINGS.screens.maxScreens),
     },
+    toolExposure: normalizeExposure(data.toolExposure),
   };
   if (isValidPort(data.lastPort)) settings.lastPort = data.lastPort;
   return settings;
@@ -151,7 +189,7 @@ function interpreterLanguage(key: string): ScriptLanguage | undefined {
   return SCRIPT_LANGUAGES.find((l) => l === language);
 }
 
-/** Current value of a settings control (keys: port, alternativePort, scripts.maxTimeoutSeconds, scripts.interpreter.<language>, inspector.maxEntries, screens.maxScreens). */
+/** Current value of a settings control (keys: port, alternativePort, scripts.maxTimeoutSeconds, scripts.interpreter.<language>, inspector.maxEntries, screens.maxScreens, toolExposure.<client kind>, toolExposure.fixedTools). */
 export function readSetting(settings: AIEcosystemSettings, key: string): unknown {
   switch (key) {
     case "port":
@@ -164,14 +202,27 @@ export function readSetting(settings: AIEcosystemSettings, key: string): unknown
       return settings.inspector.maxEntries;
     case "screens.maxScreens":
       return settings.screens.maxScreens;
+    case "toolExposure.fixedTools":
+      return settings.toolExposure.fixedTools.join(", ");
     default: {
+      const kind = exposureKind(key);
+      if (kind) return settings.toolExposure.modes[kind];
       const language = interpreterLanguage(key);
       return language ? (settings.scripts.interpreterPaths[language] ?? "") : undefined;
     }
   }
 }
 
-export type SettingEffect = "restart-server" | "interpreters";
+/** "toolExposure.<client kind>" controls. */
+function exposureKind(key: string): ClientKind | undefined {
+  const prefix = "toolExposure.";
+  if (!key.startsWith(prefix)) return undefined;
+  const kind = key.slice(prefix.length);
+  return CLIENT_KINDS.find((k) => k === kind);
+}
+
+/** "tool-exposure": the tools/list of the clients changed (the MCP clients are notified). */
+export type SettingEffect = "restart-server" | "interpreters" | "tool-exposure";
 
 /** Applies a control value to the settings in place. Returns what the plugin must do afterwards. */
 export function writeSetting(settings: AIEcosystemSettings, key: string, value: unknown): SettingEffect[] {
@@ -195,7 +246,20 @@ export function writeSetting(settings: AIEcosystemSettings, key: string, value: 
     case "screens.maxScreens":
       settings.screens.maxScreens = clampInt(value, MIN_SCREENS, MAX_SCREENS, settings.screens.maxScreens);
       return [];
+    case "toolExposure.fixedTools": {
+      const names = parseToolNames(value);
+      if (names.join(",") === settings.toolExposure.fixedTools.join(",")) return [];
+      settings.toolExposure.fixedTools = names;
+      return ["tool-exposure"];
+    }
     default: {
+      const kind = exposureKind(key);
+      if (kind) {
+        const mode = exposureMode(value);
+        if (!mode || mode === settings.toolExposure.modes[kind]) return [];
+        settings.toolExposure.modes[kind] = mode;
+        return ["tool-exposure"];
+      }
       const language = interpreterLanguage(key);
       if (!language || typeof value !== "string") return [];
       const path = value.trim();

@@ -36,6 +36,10 @@ export interface ServerHostOptions {
   isToolHidden?: McpHostOptions["isToolHidden"];
   /** Told about every MCP tool call result (see McpHostOptions). */
   onToolResult?: McpHostOptions["onToolResult"];
+  /** tools/list exposure per kind of client (see McpHostOptions). */
+  getToolExposure?: McpHostOptions["getToolExposure"];
+  isListedWhenIndexed?: McpHostOptions["isListedWhenIndexed"];
+  getIndexedInstructions?: McpHostOptions["getIndexedInstructions"];
   onStatusChange?: (status: ServerStatus) => void;
   /** Default 10 MB. */
   maxBodyBytes?: number;
@@ -215,6 +219,9 @@ export class ServerHost {
       getBaseInstructions: opts.getMcpInstructions,
       isToolHidden: opts.isToolHidden,
       onToolResult: opts.onToolResult,
+      getToolExposure: opts.getToolExposure,
+      isListedWhenIndexed: opts.isListedWhenIndexed,
+      getIndexedInstructions: opts.getIndexedInstructions,
     });
     // An ephemeral configured port (0) has no "other" port to compare with.
     const alternative = opts.port !== 0 && result.port !== opts.port;

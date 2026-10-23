@@ -131,6 +131,9 @@ describe("AI Ecosystem wiring", () => {
       "ecosystem_setup_status",
       "ecosystem_setup_save",
       "ecosystem_setup_complete",
+      "tools_find",
+      "tools_describe",
+      "tools_run",
     ]);
   });
 

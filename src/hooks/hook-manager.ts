@@ -6,7 +6,7 @@ import { ECOSYSTEM_ID } from "../types";
 import type { ClientKind, ModuleInfo, ModuleSetupState, RegisteredTool, RegistryChange } from "../types";
 import { Heartbeat } from "./heartbeat";
 import { HOOK_SCRIPT_SOURCE } from "./hook-script";
-import { CORE_FAILURE_SPEC, HOOK_SCRIPT_NAME, buildCommand, moduleHookSpecs, protectionSpec, setupSpecs } from "./hook-specs";
+import { CORE_SPECS, HOOK_SCRIPT_NAME, buildCommand, moduleHookSpecs, protectionSpec, setupSpecs } from "./hook-specs";
 import type { HookEvent } from "./hook-specs";
 import { HooksServiceImpl } from "./hooks-service";
 import { ModuleStateStore } from "./module-states";
@@ -72,6 +72,8 @@ export interface HooksStatus {
   lastError?: string;
   /** The core's own failure hook is in the settings. */
   coreInstalled: boolean;
+  /** The core's approval hook of tools_run is in the settings. */
+  coreRunApprovalInstalled?: boolean;
   /** Setup state of the core itself. */
   coreEstado?: ModuleSetupState;
   modules: HookModuleRow[];
@@ -262,8 +264,18 @@ export class HookManager {
    * the ones marked availableDuringSetup). Other clients and the core's own tools are not affected.
    */
   isToolHidden(registered: RegisteredTool, kind: ClientKind): boolean {
-    if (kind !== "claude-code" || registered.moduleId === ECOSYSTEM_ID || registered.tool.availableDuringSetup) return false;
-    return this.states.estado(registered.moduleId) === "pendente_configuracao";
+    return this.isModuleHidden(registered.moduleId, kind, registered.tool.availableDuringSetup === true);
+  }
+
+  /** The same rule for a tool known only by its module (e.g. an index entry run through tools_run). */
+  isModuleHidden(moduleId: string, kind: ClientKind, availableDuringSetup = false): boolean {
+    if (kind !== "claude-code" || moduleId === ECOSYSTEM_ID || availableDuringSetup) return false;
+    return this.states.estado(moduleId) === "pendente_configuracao";
+  }
+
+  /** True while some registered module (the core included) still waits for its first setup. */
+  isSetupPending(): boolean {
+    return this.deps.listModules().some((m) => this.states.estado(m.id) === "pendente_configuracao");
   }
 
   /** A tool call ended: failures set the module's marker, a success clears it. Never throws. */
@@ -287,7 +299,7 @@ export class HookManager {
       // Entries written by an older location of the vault follow it.
       for (const file of SETTINGS_FILES) this.merger.syncPaths(file);
       if (!node.available) return;
-      const result = this.merger.install(this.state.getSettingsFile(), [CORE_FAILURE_SPEC]);
+      const result = this.merger.install(this.state.getSettingsFile(), [...CORE_SPECS]);
       this.record(result);
     } catch (err) {
       this.fail(err);
@@ -478,6 +490,7 @@ export class HookManager {
       settingsPath: this.merger.settingsPath(settingsFile),
       lastError: this.lastError ?? unreadable,
       coreInstalled: entries.some((e) => e.module === ECOSYSTEM_ID && e.type === "falha"),
+      coreRunApprovalInstalled: entries.some((e) => e.module === ECOSYSTEM_ID && e.type === "execucao"),
       coreEstado: this.states.estado(ECOSYSTEM_ID),
       modules,
     };

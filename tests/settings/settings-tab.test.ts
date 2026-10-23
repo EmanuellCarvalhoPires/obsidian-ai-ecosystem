@@ -127,7 +127,7 @@ describe("settings tab (imperative display)", () => {
 
   it("renders the sections in order", () => {
     const headings = rendered.filter((r) => r.heading).map((r) => r.name);
-    expect(headings).toEqual(["Server", "Clients", "Scripts", "Allowed script folders", "Danger zone", "Inspector", "Modules", "Claude Code hooks", "Screens", "Services"]);
+    expect(headings).toEqual(["Server", "Clients", "Scripts", "Allowed script folders", "Danger zone", "Inspector", "Modules", "Tool exposure", "Claude Code hooks", "Screens", "Services"]);
   });
 
   it("only binds control keys the store can read", () => {
