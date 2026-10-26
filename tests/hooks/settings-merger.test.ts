@@ -86,9 +86,10 @@ describe("AI Git Tools entries", () => {
   it("has the protection and approval specs of the contract", () => {
     expect(GIT).toEqual({ module: "ai-git-tools", type: "protecao", event: "PreToolUse", matcher: "Bash|PowerShell" });
     expect(APPROVAL_SPEC).toEqual({ module: "ai-git-tools", type: "aprovacao", event: "PreToolUse", matcher: "mcp__.*__git_pr_merge" });
-    expect(approvalSpecs("ai-git-tools")).toEqual([APPROVAL_SPEC]);
+    // The merge question was removed: no module installs the approval spec anymore.
+    expect(approvalSpecs("ai-git-tools")).toEqual([]);
     expect(approvalSpecs("ai-scripts")).toEqual([]);
-    expect(moduleHookSpecs("ai-git-tools")).toEqual([GIT, APPROVAL_SPEC]);
+    expect(moduleHookSpecs("ai-git-tools")).toEqual([GIT]);
     expect(moduleHookSpecs("ai-scripts")).toEqual([SCRIPTS]);
     expect(moduleHookSpecs("telegram-ai-gateway")).toEqual([]);
     expect(parseCommand(buildCommand("/v", "ai-git-tools", "aprovacao"))).toEqual({ module: "ai-git-tools", type: "aprovacao" });

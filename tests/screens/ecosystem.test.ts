@@ -88,6 +88,7 @@ describe("screens in the AI Ecosystem", () => {
     const r = await start(newDir());
     expect(await toolNames(r)).toEqual([
       "ecosystem_status",
+      "ecosystem_diagnostico",
       "ecosystem_list_scripts",
       "ecosystem_run_script",
       "tools_find",
@@ -209,6 +210,7 @@ describe("without a screen host", () => {
     expect(eco.screens).toBeUndefined();
     expect(eco.registry.listTools().map((t) => t.tool.name)).toEqual([
       "ecosystem_status",
+      "ecosystem_diagnostico",
       "ecosystem_list_scripts",
       "ecosystem_run_script",
       "tools_find",

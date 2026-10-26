@@ -4,10 +4,12 @@ import { AI_ECOSYSTEM_API_VERSION, APPROVAL_WAIVED, ECOSYSTEM_ID } from "../type
 import type { HubModuleRegistration, HubRoute, HubTool, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
 import { createScriptRoutes, createScriptTools } from "../runner/script-tools";
 import type { ScriptToolsDeps } from "../runner/script-tools";
+import type { HooksStatus } from "../hooks/hook-manager";
 import type { ScreenService } from "../screens/service";
 import { createScreenTools } from "../screens/tools";
 import type { SetupManager } from "../setup/setup-manager";
 import { createSetupTools } from "../setup/setup-tools";
+import { createDiagnosticTool } from "./diagnostic";
 import { createDiscoveryTools } from "../tool-index/discovery-tools";
 import type { DiscoveryToolsDeps } from "../tool-index/discovery-tools";
 
@@ -34,6 +36,12 @@ export const CORE_TOOL_METADATA: Record<string, Pick<HubTool, "categoria" | "tag
     categoria: "ecosystem",
     tags: ["status", "modulos", "servicos", "diagnostico", "versao", "modules"],
     resumo: "Versão, servidor, módulos registrados (com as tools) e serviços do AI Ecosystem",
+    efeito: "leitura",
+  },
+  ecosystem_diagnostico: {
+    categoria: "ecosystem",
+    tags: ["diagnostico", "saude", "status", "primeiros passos", "kit", "health", "doctor"],
+    resumo: "Relatório de saúde da suíte: módulos, servidor, hooks, setup pendente, templates, scripts",
     efeito: "leitura",
   },
   ecosystem_list_scripts: {
@@ -119,6 +127,10 @@ export interface BuiltinModuleDeps {
   getServerStatus: () => ServerStatus;
   listModules: () => ModuleInfo[];
   listServices: () => ServiceInfo[];
+  /** State of the Claude Code hooks, for ecosystem_diagnostico. Undefined without a vault folder. */
+  getHooksStatus?: () => HooksStatus;
+  /** Looks up a Service Bus service (templates, scripts, secrets), for ecosystem_diagnostico. */
+  getService?: <T>(name: string) => T | undefined;
   scripts: ScriptToolsDeps;
   /** The saved screens. Their tools (tela_criar... and tela_<slug>) are part of this module. */
   screens?: ScreenService;
@@ -185,6 +197,7 @@ export function createBuiltinTools(deps: BuiltinModuleDeps): HubTool[] {
   };
   return [
     statusTool,
+    createDiagnosticTool(deps),
     ...createScriptTools(deps.scripts),
     ...(deps.setup ? createSetupTools(deps.setup) : []),
     ...(deps.discovery ? createDiscoveryTools(deps.discovery) : []),

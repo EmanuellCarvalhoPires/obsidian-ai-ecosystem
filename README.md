@@ -53,6 +53,7 @@ If you used Environment Keys 1.x, its clients and tokens are imported once when 
 | MCP tool | REST route (`/api/v1/ai-ecosystem`) | What it does |
 | --- | --- | --- |
 | `ecosystem_status` | `GET /status` | Version, server status, registered modules and services. |
+| `ecosystem_diagnostico` | - | Health report of the suite: modules registered vs. expected (missing = not installed), server and port, hooks and their mode, pending setup, templates and scripts loaded, Telegram yes/no and how many secrets exist (a count, never names or values). Each finding is `ok`, `aviso` or `erro` with a next action; `formato`: `texto` (default) or `json`. |
 | `ecosystem_list_scripts` | `GET /scripts` | Scripts that can run (allowed folders and `#mcp/script` notes). |
 | `ecosystem_run_script` | `POST /scripts/run` | Runs a script and returns exit code, stdout and stderr. |
 | `tools_find` | - | Searches the tools of every module (FTS5/BM25 text and filters `tag`, `categoria`, `modulo`, `kind`, `efeito`). One line per tool: `id(required*, optional?) \| summary \| effect`. |
@@ -70,6 +71,7 @@ This part writes inside the `.claude/` folder of your vault (Claude Code reads h
 **What the core writes without asking** (declared here instead of a confirmation, because it is the plugin itself):
 
 - the skill `.claude/skills/configurar-ai-ecosystem/SKILL.md`, which guides the first setup;
+- the welcome skill `.claude/skills/kit/SKILL.md` (`/kit`, see "Welcome kit" below), which is never overwritten once you edited it;
 - a temporary hook, on `SessionStart` and `UserPromptSubmit`, that tells the agent to run that skill (so a module installed while a session is already open triggers it on the next message), removed when the setup finishes;
 - a `PostToolUseFailure` hook that marks a failed tool of a module, so the protection hooks step aside for a while;
 - the state folder `.claude/ai-ecosystem/` (hook script, heartbeat, module states, rule data, backups);
@@ -94,6 +96,10 @@ The module's setup skill is `configurar-ai-git-tools`. It asks for the protectio
 **Setup tools** (always visible): `ecosystem_setup_status`, `ecosystem_setup_save` and `ecosystem_setup_complete`. They report what was detected, store the answers and finish the setup (marker, removal of the temporary hook, protection hooks, tools shown, `GEMINI.md`). The allowed script folders can be added this way only while AI Scripts is being set up (existing folders of the vault only, and you see a notice); afterwards they change only in the settings.
 
 **Screens.** `tela_criar`, `tela_listar`, `tela_editar` and `tela_remover` let an agent define forms that open in Obsidian. A new or changed screen is shown as a preview and saved only after you approve it. Each saved screen becomes its own tool, `tela_<slug>`, with a 5-minute wait (it ends earlier if you send another message or answer). Password and token fields are stored in the Values section of Environment Keys and never returned to the agent, which only sees "filled in". The default limit is 30 screens (a setting).
+
+### Welcome kit
+
+Type `/kit` (or ask "where do I start?") in a Claude Code session and the agent calls `ecosystem_diagnostico`, explains in plain language what is fine and what is missing, lists the templates and scripts you can already use (`list_templates`, `list_ai_scripts`, when those modules are installed) and proposes three practical first steps. It runs nothing before you choose, and never anything that writes outside the vault or sends a message without your pick. The skill file is yours to edit: the plugin only rewrites it while it is still exactly what it wrote (the last line holds a hash of the text). The usage block of `GEMINI.md` lists `ecosystem_diagnostico` too, for clients without skills.
 
 ## Request inspector
 
@@ -340,6 +346,7 @@ Se você usava o Environment Keys 1.x, os clientes e tokens dele são importados
 | Tool MCP | Rota REST (`/api/v1/ai-ecosystem`) | O que faz |
 | --- | --- | --- |
 | `ecosystem_status` | `GET /status` | Versão, status do servidor, módulos e serviços registrados. |
+| `ecosystem_diagnostico` | - | Relatório de saúde da suíte: módulos registrados vs. esperados (ausente = não instalado), servidor e porta, hooks e o modo deles, configuração pendente, templates e scripts carregados, Telegram sim/não e quantos segredos existem (só a contagem, nunca nomes ou valores). Cada achado é `ok`, `aviso` ou `erro` com a próxima ação; `formato`: `texto` (padrão) ou `json`. |
 | `ecosystem_list_scripts` | `GET /scripts` | Scripts que podem rodar (pastas permitidas e notas `#mcp/script`). |
 | `ecosystem_run_script` | `POST /scripts/run` | Executa um script e devolve código de saída, stdout e stderr. |
 | `tools_find` | - | Busca as tools de todos os módulos (texto FTS5/BM25 e filtros `tag`, `categoria`, `modulo`, `kind`, `efeito`). Uma linha por tool: `id(obrigatorio*, opcional?) \| resumo \| efeito`. |
@@ -357,6 +364,7 @@ Esta parte grava dentro da pasta `.claude/` do seu cofre (o Claude Code lê hook
 **O que o núcleo grava sem perguntar** (declarado aqui no lugar de uma confirmação, porque é o próprio plugin):
 
 - a skill `.claude/skills/configurar-ai-ecosystem/SKILL.md`, que guia a primeira configuração;
+- a skill de boas-vindas `.claude/skills/kit/SKILL.md` (`/kit`, veja "Kit de boas-vindas" abaixo), que nunca é sobrescrita depois que você a edita;
 - um hook temporário, em `SessionStart` e `UserPromptSubmit`, que manda o agente rodar essa skill (assim um módulo instalado com a sessão já aberta dispara a skill na mensagem seguinte), removido quando a configuração termina;
 - um hook de `PostToolUseFailure` que marca a falha de uma tool de um módulo, para os hooks de proteção ficarem de lado por um tempo;
 - a pasta de estado `.claude/ai-ecosystem/` (script dos hooks, heartbeat, estados dos módulos, dados das regras, cópias de segurança);
@@ -381,6 +389,10 @@ A skill de configuração do módulo é `configurar-ai-git-tools`. Ela pergunta 
 **Tools de configuração** (sempre visíveis): `ecosystem_setup_status`, `ecosystem_setup_save` e `ecosystem_setup_complete`. Elas informam o que foi detectado, guardam as respostas e concluem a configuração (marcador, remoção do hook temporário, hooks de proteção, tools liberadas, `GEMINI.md`). As pastas permitidas de scripts só podem ser acrescentadas por aqui enquanto o AI Scripts está sendo configurado (só pastas que já existem no cofre, e você vê um aviso); depois, mudam só nas configurações.
 
 **Telas.** `tela_criar`, `tela_listar`, `tela_editar` e `tela_remover` deixam um agente definir formulários que abrem no Obsidian. Uma tela nova ou alterada aparece como prévia e só é salva depois da sua aprovação. Cada tela salva vira uma tool própria, `tela_<slug>`, com espera de 5 minutos (termina antes se você mandar outra mensagem ou responder). Campos de senha e token são guardados na seção de Valores do Environment Keys e nunca voltam ao agente, que só vê "preenchido". O limite padrão é de 30 telas (configurável).
+
+### Kit de boas-vindas
+
+Digite `/kit` (ou pergunte "por onde começo?") numa sessão do Claude Code e o agente chama `ecosystem_diagnostico`, explica em linguagem simples o que está ok e o que falta, lista os templates e scripts que já dá para usar (`list_templates`, `list_ai_scripts`, quando esses módulos estão instalados) e propõe três primeiros passos práticos. Ele não executa nada antes da sua escolha, e nunca algo que grave fora do cofre ou envie mensagem sem você escolher. O arquivo da skill é seu para editar: o plugin só o reescreve enquanto ele ainda é exatamente o que ele gravou (a última linha guarda um hash do texto). O bloco de uso do `GEMINI.md` também lista `ecosystem_diagnostico`, para clientes sem skills.
 
 ## Inspetor de requisições
 

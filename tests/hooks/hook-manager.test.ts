@@ -382,7 +382,7 @@ describe("protection hooks of a module", () => {
     expect(manager.getStatus().modules[0]!.installed).toHaveLength(0);
   });
 
-  it("installs the merge approval of AI Git Tools with its protection entry, and keeps it in mode off", async () => {
+  it("installs only the protection entry of AI Git Tools (no merge approval), and keeps it in mode off", async () => {
     const manager = await started();
     registry.add("ai-git-tools");
     manager.handleRegistryChange({ type: "module-registered", moduleId: "ai-git-tools" });
@@ -390,15 +390,16 @@ describe("protection hooks of a module", () => {
     manager.setMode("ai-git-tools", "off");
     expect(await manager.installProtection("ai-git-tools")).toMatchObject({ ok: true });
     const pre = modulePre();
-    expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Bash|PowerShell", "mcp__.*__git_pr_merge"]);
-    expect(pre[1].hooks[0].command).toContain("ai-git-tools aprovacao");
+    expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Bash|PowerShell"]);
+    expect(pre[0].hooks[0].command).toContain("ai-git-tools protecao");
+    expect(JSON.stringify(settings())).not.toContain("git_pr_merge");
     expect(state("config.json").modos["ai-git-tools"]).toBe("off");
 
     // Reapplying does not duplicate anything.
     expect(await manager.installProtection("ai-git-tools")).toEqual({ ok: true, changed: false });
-    expect(modulePre()).toHaveLength(2);
+    expect(modulePre()).toHaveLength(1);
     const row = manager.getStatus().modules.find((m) => m.id === "ai-git-tools")!;
-    expect(row.installed.map((e) => e.type).sort()).toEqual(["aprovacao", "protecao"]);
+    expect(row.installed.map((e) => e.type).sort()).toEqual(["protecao"]);
     expect(row.mode).toBe("off");
 
     expect(manager.removeModule("ai-git-tools")).toEqual({ ok: true, changed: true });
@@ -407,7 +408,7 @@ describe("protection hooks of a module", () => {
     expect(JSON.stringify(settings())).toContain("ai-ecosystem execucao");
   });
 
-  it("writes the default mode avisar of AI Git Tools explicitly, and plans both entries", async () => {
+  it("writes the default mode avisar of AI Git Tools explicitly, and plans its protection entry", async () => {
     const manager = await started();
     expect(manager.state.getMode("ai-git-tools")).toBe("avisar");
     expect(manager.state.getMode("ai-scripts")).toBe("bloquear");
@@ -416,7 +417,6 @@ describe("protection hooks of a module", () => {
     const plan = await manager.planInstall("ai-git-tools");
     expect(plan.entries.map((e) => [e.matcher, e.command.split(" ").slice(-2).join(" ")])).toEqual([
       ["Bash|PowerShell", "ai-git-tools protecao"],
-      ["mcp__.*__git_pr_merge", "ai-git-tools aprovacao"],
     ]);
 
     expect((await manager.installProtection("ai-git-tools")).ok).toBe(true);

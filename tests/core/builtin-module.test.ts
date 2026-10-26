@@ -60,7 +60,7 @@ describe("built-in module", () => {
   it("has the expected identity, tools and routes", () => {
     const module = createBuiltinModule(deps());
     expect(module).toMatchObject({ id: "ai-ecosystem", name: "AI Ecosystem", version: "1.0.0", apiVersion: 1 });
-    expect(module.tools?.map((t) => t.name)).toEqual(["ecosystem_status", "ecosystem_list_scripts", "ecosystem_run_script"]);
+    expect(module.tools?.map((t) => t.name)).toEqual(["ecosystem_status", "ecosystem_diagnostico", "ecosystem_list_scripts", "ecosystem_run_script"]);
     expect(module.routes?.map((r) => `${r.method} ${r.path}`)).toEqual(["GET /status", "GET /scripts", "POST /scripts/run"]);
   });
 
@@ -103,8 +103,9 @@ describe("built-in module", () => {
 });
 
 describe("index metadata of the core tools", () => {
-  it("covers the 10 core tools with a category, a short summary and an effect", () => {
+  it("covers the 11 core tools with a category, a short summary and an effect", () => {
     expect(Object.keys(CORE_TOOL_METADATA).sort()).toEqual([
+      "ecosystem_diagnostico",
       "ecosystem_list_scripts",
       "ecosystem_run_script",
       "ecosystem_setup_complete",

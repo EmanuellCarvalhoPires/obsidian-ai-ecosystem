@@ -126,6 +126,7 @@ describe("AI Ecosystem wiring", () => {
     expect(init.result.instructions).toContain("ecosystem_status");
     expect(await toolNames(r)).toEqual([
       "ecosystem_status",
+      "ecosystem_diagnostico",
       "ecosystem_list_scripts",
       "ecosystem_run_script",
       "ecosystem_setup_status",

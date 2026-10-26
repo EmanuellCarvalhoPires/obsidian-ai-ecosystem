@@ -93,6 +93,8 @@ export interface HookInstallPlan {
     setupEntries: Array<{ event: HookEvent; command: string }>;
     /** Vault-relative path of the file that gets the usage block for clients without hooks. */
     geminiPath: string;
+    /** Vault-relative path of the /kit welcome skill, when the install is about to write it. */
+    kitSkillPath?: string;
   };
 }
 

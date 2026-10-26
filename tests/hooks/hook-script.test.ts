@@ -543,65 +543,45 @@ describe("hook script: ai-git-tools (git, gh and the GitHub and Bitbucket APIs)"
   });
 });
 
-describe("hook script: aprovacao (git_pr_merge)", () => {
+describe("hook script: aprovacao (no decision, the merge question was removed)", () => {
   const GIT = "ai-git-tools";
   const MERGE = "mcp__environment-variables__git_pr_merge";
 
-  function approve(input: Record<string, unknown>) {
-    return world.run(GIT, "aprovacao", { hook_event_name: "PreToolUse", tool_name: MERGE, ...input });
+  function approve(input: Record<string, unknown>, env: Record<string, string> = {}) {
+    return world.run(GIT, "aprovacao", { hook_event_name: "PreToolUse", tool_name: MERGE, ...input }, env);
   }
 
-  it("asks with the PR number and the target branch", () => {
+  it("never asks, for a normal merge input", () => {
     world.module(GIT);
-    const run = approve({ tool_input: { repo: "Projeto", numero: 12, destino: "develop", titulo: "x" } });
-    expect(run.status).toBe(0);
-    expect(run.json?.hookSpecificOutput).toEqual({
-      hookEventName: "PreToolUse",
-      permissionDecision: "ask",
-      permissionDecisionReason: "Posso fazer o merge do PR #12 para a branch develop?",
-    });
-    expect(approve({ tool_input: { numero: "7", destino: "main" } }).reason).toBe("Posso fazer o merge do PR #7 para a branch main?");
-  });
-
-  it("asks with a generic text when numero or destino is missing or invalid", () => {
-    world.module(GIT);
-    for (const toolInput of [{}, { numero: 12 }, { destino: "develop" }, { numero: "abc", destino: "develop" }, { numero: 12, destino: "  " }, { numero: -1, destino: "x" }]) {
+    for (const toolInput of [{ repo: "Projeto", numero: 12, destino: "develop", titulo: "x" }, {}, { numero: "abc" }]) {
       const run = approve({ tool_input: toolInput });
-      expect(run.decision, JSON.stringify(toolInput)).toBe("ask");
-      expect(run.reason).toBe("Posso fazer o merge deste PR?");
+      expect(run.status).toBe(0);
+      expect(run.stdout).toBe("");
+      expect(run.decision).toBeUndefined();
     }
-    expect(approve({}).decision).toBe("ask");
   });
 
-  it("asks even when the input cannot be read (it never fails open)", () => {
+  it("never asks when the input cannot be read", () => {
     for (const input of ["not json", "", "[1,2]"]) {
       const result = spawnSync(process.execPath, [world.script, GIT, "aprovacao"], { input, encoding: "utf8", timeout: 15000 });
       expect(result.status, input).toBe(0);
-      const out = JSON.parse(result.stdout) as { hookSpecificOutput: Record<string, unknown> };
-      expect(out.hookSpecificOutput).toMatchObject({ permissionDecision: "ask", permissionDecisionReason: "Posso fazer o merge deste PR?" });
+      expect(result.stdout, input).toBe("");
     }
   });
 
-  it("asks when its input never closes (the guard asks instead of allowing)", async () => {
-    const run = await runWithOpenStdin(world, GIT, "aprovacao");
-    expect(run.code).toBe(0);
-    expect(run.stdout).toContain('"permissionDecision":"ask"');
-  });
-
-  it("ignores the mode, the heartbeat and the setup state of the module", () => {
+  it("never asks with the module mode off, without the heartbeat or with hooks off", () => {
     world.config({ modos: { [GIT]: "off" } });
     world.heartbeat(null);
     const input = { tool_input: { numero: 12, destino: "develop" } };
-    expect(approve(input).reason).toBe("Posso fazer o merge do PR #12 para a branch develop?");
-    expect(world.run(GIT, "aprovacao", { tool_name: MERGE, ...input }, { AI_ECOSYSTEM_HOOKS: "off" }).decision).toBe("ask");
+    expect(approve(input).stdout).toBe("");
+    expect(approve(input, { AI_ECOSYSTEM_HOOKS: "off" }).stdout).toBe("");
     world.module(GIT, "pendente_configuracao");
-    expect(approve(input).decision).toBe("ask");
+    expect(approve(input).stdout).toBe("");
   });
 
-  it("never answers allow", () => {
-    world.module(GIT);
-    for (const toolInput of [{ numero: 1, destino: "develop" }, {}, { numero: 1, destino: "a\nb" }]) {
-      expect(approve({ tool_input: toolInput }).decision).not.toBe("allow");
-    }
+  it("exits 0 with empty output when its input never closes", async () => {
+    const run = await runWithOpenStdin(world, GIT, "aprovacao");
+    expect(run.code).toBe(0);
+    expect(run.stdout).toBe("");
   });
 });

@@ -20,6 +20,8 @@ import environmentVariablesEn from "./skills/environment-variables.en.md?raw";
 import environmentVariablesPt from "./skills/environment-variables.pt.md?raw";
 import genericEn from "./skills/generic.en.md?raw";
 import genericPt from "./skills/generic.pt.md?raw";
+import kitEn from "./skills/kit.en.md?raw";
+import kitPt from "./skills/kit.pt.md?raw";
 import telegramEn from "./skills/telegram-ai-gateway.en.md?raw";
 import telegramPt from "./skills/telegram-ai-gateway.pt.md?raw";
 
@@ -36,6 +38,17 @@ const SPECIFIC: Record<string, Record<Lang, string>> = {
 
 const GENERIC: Record<Lang, string> = { en: genericEn, pt: genericPt };
 const COMMON: Record<Lang, string> = { en: commonEn, pt: commonPt };
+
+const KIT: Record<Lang, string> = { en: kitEn, pt: kitPt };
+
+/** The welcome kit skill (/kit) is not a setup skill: it belongs to the core and has its own name. */
+export const KIT_SKILL_NAME = "kit";
+export const KIT_SKILL_PATH = `.claude/skills/${KIT_SKILL_NAME}/SKILL.md`;
+
+/** Complete SKILL.md of the welcome kit, in the given language (always LF). */
+export function buildKitSkill(lang: Lang): string {
+  return KIT[lang].replace(/\r\n/g, "\n").replace(/\s+$/, "") + "\n";
+}
 
 /** Name of the folder (and of the skill) of a module. */
 export function skillName(moduleId: string): string {

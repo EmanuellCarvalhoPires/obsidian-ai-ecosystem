@@ -2,13 +2,14 @@
 //
 // Written by the AI Ecosystem plugin to <vault>/.claude/ai-ecosystem/hooks/ and registered
 // in the Claude Code settings. Types: protecao (PreToolUse), setup (SessionStart, UserPromptSubmit), falha
-// (PostToolUseFailure), aprovacao (PreToolUse of git_pr_merge), execucao (PreToolUse of tools_run).
+// (PostToolUseFailure), aprovacao (retired: no decision, kept so old settings entries stay harmless),
+// execucao (PreToolUse of tools_run).
 // Plain Node, no dependencies, no network (execucao reads the tools.db files with node:sqlite).
 //
 // This script must never get in the way of the agent: any problem (missing or invalid state
 // file, unexpected input, exception, more than 2 seconds) ends with exit code 0 and no
-// output, which lets the tool call proceed. The exceptions are the types aprovacao and execucao:
-// they never fail open, any problem there still makes Claude Code ask the user.
+// output, which lets the tool call proceed. The exception is the type execucao: it never fails
+// open, any problem there still makes Claude Code ask the user.
 //
 // The script never answers permissionDecision "allow": that would approve the call and skip the
 // normal Claude Code permission prompt. A reminder (mode avisar, repetition lock) goes out as
@@ -24,7 +25,6 @@ const LOCK_WINDOW_MS = 10 * 60_000;
 const LOCK_PASS_ATTEMPT = 3;
 const WINDOWS = process.platform === "win32";
 const TYPE = process.argv[3];
-const GENERIC_APPROVAL = "Posso fazer o merge deste PR?";
 const GENERIC_RUN = "Posso executar esta tool pelo tools_run?";
 /** aprovacao values with a fixed meaning (anything else is a question template). */
 const APPROVAL_REQUIRED = "obrigatoria";
@@ -56,9 +56,8 @@ const GIT_HOSTS = ["api.github.com", "github.com", "api.bitbucket.org", "bitbuck
 // Entry point
 // ---------------------------------------------------------------------------
 
-/** Ends the process without output (the call proceeds). For aprovacao and execucao it asks the user instead. */
+/** Ends the process without output (the call proceeds). For execucao it asks the user instead. */
 function allow() {
-  if (TYPE === "aprovacao") return askApproval(GENERIC_APPROVAL);
   if (TYPE === "execucao") return askApproval(GENERIC_RUN);
   process.exit(0);
 }
@@ -102,7 +101,7 @@ function main() {
       if (type === "protecao") return protect(stateDir, moduleId, input);
       if (type === "setup") return setup(stateDir, moduleId, input);
       if (type === "falha") return failure(stateDir, input);
-      if (type === "aprovacao") return approval(input);
+      if (type === "aprovacao") return pass();
       if (type === "execucao") {
         execution(stateDir, input).catch(() => allow());
         return;
@@ -229,23 +228,6 @@ function protect(stateDir, moduleId, input) {
 }
 
 // ---------------------------------------------------------------------------
-// aprovacao (PreToolUse of git_pr_merge)
-// ---------------------------------------------------------------------------
-
-/** Always asks: the mode of the module, the heartbeat and the setup state do not matter here. */
-function approval(input) {
-  askApproval(mergeQuestion(isObject(input.tool_input) ? input.tool_input : {}));
-}
-
-/** The merge question with the PR number and destination of the call, or the generic one. */
-function mergeQuestion(toolInput) {
-  const numero = prNumber(toolInput.numero);
-  const destino = typeof toolInput.destino === "string" ? toolInput.destino.trim() : "";
-  if (numero === undefined || destino === "" || destino.length > 255 || /[\r\n]/.test(destino)) return GENERIC_APPROVAL;
-  return `Posso fazer o merge do PR #${numero} para a branch ${destino}?`;
-}
-
-// ---------------------------------------------------------------------------
 // execucao (PreToolUse of tools_run)
 // ---------------------------------------------------------------------------
 
@@ -259,8 +241,6 @@ async function execution(stateDir, input) {
   const id = typeof toolInput.id === "string" ? toolInput.id.trim() : "";
   if (!TOOL_ID.test(id)) return askApproval(GENERIC_RUN);
   const args = toolArgs(toolInput.args);
-  // The merge question of AI Git Tools also holds through tools_run, whatever the index says.
-  if (id === "git_pr_merge") return askApproval(mergeQuestion(args));
   const row = await findIndexedTool(stateDir, id);
   if (!row) return askApproval(`Posso executar ${id} pelo tools_run? Essa tool não está em nenhum índice (tools.db), então o efeito dela é desconhecido.`);
   const question = runQuestion(id, row, args);

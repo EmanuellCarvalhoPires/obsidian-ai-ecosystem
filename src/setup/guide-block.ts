@@ -39,6 +39,11 @@ const GUIDES: ModuleGuide[] = [
         tools: ["ecosystem_status"],
       },
       {
+        task: { pt: "Conferir a saúde da suíte e por onde começar (skill `/kit`)", en: "Check the health of the suite and where to start (skill `/kit`)" },
+        plugin: "AI Ecosystem",
+        tools: ["ecosystem_diagnostico"],
+      },
+      {
         task: { pt: "Rodar um script de uma pasta permitida", en: "Run a script from an allowed folder" },
         plugin: "AI Ecosystem",
         tools: ["ecosystem_list_scripts", "ecosystem_run_script"],

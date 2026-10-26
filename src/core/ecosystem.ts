@@ -258,6 +258,8 @@ export class Ecosystem {
       getServerStatus: () => this.server.getStatus(),
       listModules: () => this.registry.listModules(),
       listServices: () => this.bus.list(),
+      getHooksStatus: this.hooks ? () => (this.hooks as HookManager).getStatus() : undefined,
+      getService: <T>(name: string) => this.bus.get<T>(name),
       scripts: {
         engine: this.engine,
         vaultBasePath: deps.vaultBasePath,

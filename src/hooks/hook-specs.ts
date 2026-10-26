@@ -37,9 +37,9 @@ export const APPROVAL_SPEC: HookSpec = {
   matcher: "mcp__.*__git_pr_merge",
 };
 
-/** The approval entries of a module (installed and removed together with its protection entry). */
-export function approvalSpecs(moduleId: string): HookSpec[] {
-  return moduleId === APPROVAL_SPEC.module ? [{ ...APPROVAL_SPEC }] : [];
+/** No module installs an approval entry any more (the merge question was removed); kept for the hook manager. */
+export function approvalSpecs(_moduleId: string): HookSpec[] {
+  return [];
 }
 
 /** Every permanent entry of a module: its protection hook and its approval hooks. */

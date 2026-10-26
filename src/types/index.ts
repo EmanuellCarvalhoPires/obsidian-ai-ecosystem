@@ -389,6 +389,8 @@ export interface SecretVaultService {
   ): Promise<void>;
   /** True when a secret OR a value already uses this name. Optional: older Environment Keys lack it. */
   nameExists?(name: string): boolean;
+  /** How many secrets are stored (a number, never names or values). Optional: used by ecosystem_diagnostico when present. */
+  count?(): number;
   /**
    * Creates an entry in the "Values" section of Environment Keys. Never overwrites and never
    * returns the value. Optional: older Environment Keys lack it.
@@ -400,6 +402,20 @@ export interface SecretVaultService {
     description?: string;
     createdBy: string;
   }): Promise<{ ok: true } | { ok: false; reason: "exists" | "locked" | "invalid_name" | "empty" }>;
+}
+
+/** Names of the services AI Templates and AI Scripts register. ecosystem_diagnostico only counts what their list methods return. */
+export const TEMPLATES_SERVICE = "templates";
+export const SCRIPTS_SERVICE = "scripts";
+
+/** The part of the "templates" service the diagnostic uses. */
+export interface TemplatesListService {
+  listTemplates(): Promise<unknown[]> | unknown[];
+}
+
+/** The part of the "scripts" service the diagnostic uses. */
+export interface ScriptsListService {
+  listScripts(): Promise<unknown[]> | unknown[];
 }
 
 /** Kinds of entry in the Environment Keys "Values" section. */

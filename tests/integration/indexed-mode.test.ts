@@ -172,6 +172,7 @@ describe("indexed exposure", () => {
     try {
       const rows = db.prepare("SELECT name, categoria, efeito, aprovacao FROM tools ORDER BY name").all() as Array<Record<string, string | null>>;
       expect(rows.map((row) => row.name)).toEqual([
+        "ecosystem_diagnostico",
         "ecosystem_list_scripts",
         "ecosystem_run_script",
         "ecosystem_setup_complete",

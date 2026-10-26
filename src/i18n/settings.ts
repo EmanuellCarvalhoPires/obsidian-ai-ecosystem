@@ -143,6 +143,7 @@ export const settingsStrings: StringTable = {
     "settings.hooks.modal.catalogIntro":
       "Before anything is downloaded, this is what AI Ecosystem will write for {name}. Your own files and hook entries are not changed, and a backup of the settings file is kept.",
     "settings.hooks.modal.catalogSkill": "The setup skill, at {path}. It guides the setup in your first Claude Code session.",
+    "settings.hooks.modal.catalogKit": "The welcome kit skill (/kit), at {path}. It shows what is installed and suggests first steps. A file you edit is never overwritten.",
     "settings.hooks.modal.catalogSetupHook":
       "A temporary setup hook, in {path}. It runs at the start of each Claude Code session and on each message until the setup is finished, then it is removed:",
     "settings.hooks.modal.catalogProtection":
@@ -304,6 +305,7 @@ export const settingsStrings: StringTable = {
     "settings.hooks.modal.catalogIntro":
       "Antes de baixar qualquer coisa, isto é o que o AI Ecosystem vai gravar para o {name}. Seus arquivos e suas entradas de hooks não são alterados, e fica uma cópia de segurança do arquivo de configurações.",
     "settings.hooks.modal.catalogSkill": "A skill de configuração, em {path}. Ela guia a configuração na sua primeira sessão do Claude Code.",
+    "settings.hooks.modal.catalogKit": "A skill do kit de boas-vindas (/kit), em {path}. Ela mostra o que está instalado e sugere os primeiros passos. Um arquivo que você editar nunca é sobrescrito.",
     "settings.hooks.modal.catalogSetupHook":
       "Um hook temporário de configuração, em {path}. Ele roda no início de cada sessão do Claude Code e a cada mensagem até a configuração terminar, e depois é removido:",
     "settings.hooks.modal.catalogProtection":

@@ -289,6 +289,7 @@ export class HooksInstallModal extends Modal {
       this.addEntries(plan.entries, protection);
     }
     list.createEl("li", { text: t("settings.hooks.modal.catalogGemini", { path: catalog.geminiPath }) });
+    if (catalog.kitSkillPath) list.createEl("li", { text: t("settings.hooks.modal.catalogKit", { path: catalog.kitSkillPath }) });
 
     contentEl.createEl("p", { cls: "aie-modal-note", text: t("settings.hooks.modal.catalogDecline") });
     if (!plan.node.available) this.addNodeWarning("settings.hooks.modal.catalogNodeMissing");

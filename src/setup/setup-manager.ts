@@ -20,7 +20,7 @@ import { buildGuideBlock, hasBlock, upsertBlock } from "./guide-block";
 import { buildQuestions, steeringKeys } from "./questions";
 import type { QuestionView } from "./questions";
 import { SkillFiles } from "./skill-files";
-import { buildSkill, skillPath } from "./skill-texts";
+import { KIT_SKILL_PATH, buildKitSkill, buildSkill, skillPath } from "./skill-texts";
 
 export const GEMINI_FILE = "GEMINI.md";
 export const CLAUDE_FILE = "CLAUDE.md";
@@ -192,6 +192,8 @@ export class SetupManager implements HookManagerListener {
         skillPath: skillPath(moduleId),
         setupEntries: SETUP_EVENTS.map((event) => ({ event, command: buildCommand(this.hooks.state.vaultPath, moduleId, "setup") })),
         geminiPath: GEMINI_FILE,
+        // Listed only while the file is not there yet: it is the core's skill, not the module's.
+        ...(this.skills.kitExists() ? {} : { kitSkillPath: KIT_SKILL_PATH }),
       },
     };
   }
@@ -259,6 +261,8 @@ export class SetupManager implements HookManagerListener {
       // Modules that were already there (legacy, manual) never went through the confirmation.
       if (state.origem !== "catalogo" && state.origem !== "nucleo") return;
       this.skills.write(moduleId, buildSkill(moduleId, state.nome ?? moduleId, this.deps.language()));
+      // The welcome kit (/kit) comes with the core and is never overwritten once the user edited it.
+      if (moduleId === ECOSYSTEM_ID) this.skills.writeKit(buildKitSkill(this.deps.language()));
       if (state.estado === "pendente_configuracao" && !this.hooks.state.hasConfiguredMarker(moduleId)) {
         const result = await this.hooks.installSetupHook(moduleId);
         if (!result.ok && result.error !== NODE_MISSING) console.warn(`[AI Ecosystem] Could not write the setup hook of ${moduleId}: ${result.error}`);

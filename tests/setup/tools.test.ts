@@ -215,7 +215,7 @@ describe("ecosystem_setup_save: core keys", () => {
     expect((await callTool(r, "ecosystem_setup_complete", { modulo: "ai-git-tools" })).isError).toBe(false);
     expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBe("avisar");
     expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools protecao"))).toBe(true);
-    expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools aprovacao"))).toBe(true);
+    expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools aprovacao"))).toBe(false);
   });
 
   it("puts AI Git Tools on bloquear when the module itself answers bloquear", async () => {

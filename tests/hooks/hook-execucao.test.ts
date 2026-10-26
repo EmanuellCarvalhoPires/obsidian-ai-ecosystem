@@ -72,9 +72,12 @@ describe("hook script: execucao (tools_run)", () => {
     expect(run({ id: "apaga_molde" }).decision).toBe("ask");
   });
 
-  it("keeps the merge question of AI Git Tools through tools_run, whatever the index says", () => {
-    expect(run({ id: "git_pr_merge", args: { numero: 9, destino: "develop" } }).reason).toBe("Posso fazer o merge do PR #9 para a branch develop?");
-    expect(run({ id: "git_pr_merge" }).reason).toBe("Posso fazer o merge deste PR?");
+  it("treats git_pr_merge like any other tool: it follows the index row (no special merge question)", () => {
+    for (const input of [{ id: "git_pr_merge", args: { numero: 9, destino: "develop" } }, { id: "git_pr_merge" }]) {
+      const out = run(input);
+      expect(out.status).toBe(0);
+      expect(out.stdout).toBe("");
+    }
   });
 
   it("asks for an unknown id, an invalid id, bad input and without any index", () => {
