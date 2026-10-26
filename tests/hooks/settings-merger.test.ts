@@ -67,7 +67,7 @@ describe("hook commands", () => {
   });
 
   it("has the matchers of the contract", () => {
-    expect(SEARCH).toMatchObject({ event: "PreToolUse", matcher: "Grep|Glob" });
+    expect(SEARCH).toMatchObject({ event: "PreToolUse", matcher: "Grep|Glob|Bash|PowerShell" });
     expect(protectionSpec("environment-variables")).toMatchObject({ event: "PreToolUse", matcher: "Bash|PowerShell" });
     expect(SCRIPTS).toMatchObject({ event: "PreToolUse", matcher: "Bash|PowerShell" });
     expect(TEMPLATES).toMatchObject({ event: "PreToolUse", matcher: "Write" });

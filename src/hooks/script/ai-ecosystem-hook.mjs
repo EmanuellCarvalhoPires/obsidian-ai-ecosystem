@@ -407,10 +407,12 @@ function matchRule(moduleId, toolName, toolInput, env) {
 // ---- ai-vault-search -------------------------------------------------------
 
 function vaultSearchRule(toolName, toolInput, env) {
-  if (toolName !== "Grep" && toolName !== "Glob") return undefined;
+  const shell = toolName === "Bash" || toolName === "PowerShell";
+  if (toolName !== "Grep" && toolName !== "Glob" && !shell) return undefined;
   const pastas = readJson(env.stateDir, "pastas.json");
   if (!isObject(pastas)) return undefined;
   const outside = [...stringList(pastas.foraDoIndice), ...stringList(pastas.notasDeTools)];
+  if (shell) return shellSearchRule(toolInput, env, outside);
 
   let target;
   if (typeof toolInput.path === "string" && toolInput.path !== "") target = toolInput.path;
@@ -418,13 +420,102 @@ function vaultSearchRule(toolName, toolInput, env) {
     target = fixedPrefix(toolInput.pattern);
   } else target = env.cwd;
 
+  if (!searchesIndexedFolder(target, env, outside)) return undefined;
+  return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`;
+}
+
+/** True when the folder is in the vault and not in .claude, the config folder or a folder left out of the index. */
+function searchesIndexedFolder(target, env, outside) {
   const rel = relativeToVault(normalizePath(target, env.cwd), env.vault);
-  if (rel === undefined) return undefined;
+  if (rel === undefined) return false;
   const segments = rel === "" ? [] : rel.split("/");
   const guarded = [".claude", env.configDir];
-  if (guarded.some((dir) => insideFolder(segments, dir))) return undefined;
-  if (outside.some((glob) => insideFolder(segments, glob))) return undefined;
-  return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`;
+  if (guarded.some((dir) => insideFolder(segments, dir))) return false;
+  return !outside.some((glob) => insideFolder(segments, glob));
+}
+
+/** Content searchers that read stdin when they are the target of a pipe. */
+const STDIN_SEARCHERS = ["grep", "egrep", "fgrep", "rg", "ag", "ack", "findstr", "select-string", "sls"];
+/** Name or content searchers that walk folders by themselves. */
+const FOLDER_SEARCHERS = ["find", "fd", "fdfind"];
+/** Listers that only count as a search when they recurse. */
+const LISTERS = ["ls", "dir", "gci", "get-childitem"];
+const SEARCH_WRAPPERS = ["rtk", "proxy", "command", "sudo", "time", "&"];
+
+/** The search a Bash or PowerShell command runs inside the indexed part of the vault, as a message, or undefined. */
+function shellSearchRule(toolInput, env, outside) {
+  const command = typeof toolInput.command === "string" ? toolInput.command : "";
+  let cwd = env.cwd;
+  for (const { text, piped } of splitPipeline(command)) {
+    const tokens = tokenize(text);
+    const moved = changeDirectory(tokens, cwd);
+    if (moved !== undefined) {
+      cwd = moved;
+      continue;
+    }
+    const search = shellSearch(tokens, piped);
+    if (!search) continue;
+    const targets = search.paths.length > 0 ? search.paths : [cwd];
+    const hit = targets.find((p) => searchesIndexedFolder(normalizePath(p, cwd), { ...env, cwd }, outside));
+    if (hit === undefined) continue;
+    const folder = relativeKeepCase(normalizePath(hit, cwd, true), { ...env, cwd });
+    return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(search.content ? "Grep" : "Glob", { pattern: search.pattern }, folder)}`;
+  }
+  return undefined;
+}
+
+/** The search done by one command ({ content, pattern, paths }), or undefined when it is not a folder search. */
+function shellSearch(tokens, piped) {
+  let i = 0;
+  while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || SEARCH_WRAPPERS.includes(tokens[i].toLowerCase()))) i++;
+  const name = (tokens[i] ?? "").replace(/\\/g, "/").split("/").pop().toLowerCase().replace(/\.exe$/, "");
+  const args = tokens.slice(i + 1);
+  const content = STDIN_SEARCHERS.includes(name);
+  if (content && piped) return undefined;
+  if (name === "find" && piped) return undefined;
+  if (!content && !FOLDER_SEARCHERS.includes(name)) {
+    if (!LISTERS.includes(name) || !recurses(name, args)) return undefined;
+  }
+  const options = (a) => a.startsWith("-") || (name === "dir" && /^\/[A-Za-z]$/.test(a));
+  const positional = args.filter((a) => !options(a));
+  const hasPatternOption = args.some((a) => /^(-e|-f|--regexp|--file|-pattern)$/i.test(a));
+  const pattern = content && !hasPatternOption ? (positional.shift() ?? "") : "";
+  const pathLike = (a) => isAbsolutePath(a) || /[\\/]/.test(a) || a.startsWith(".");
+  const explicit = args.findIndex((a) => /^-(path|literalpath)$/i.test(a));
+  const paths = explicit >= 0 && args[explicit + 1] ? [args[explicit + 1]] : positional.filter(pathLike);
+  return { content, pattern, paths };
+}
+
+function recurses(name, args) {
+  if (name === "ls") return args.some((a) => /^-[A-Za-z]*R/.test(a) || a === "--recursive");
+  return args.some((a) => /^(-r|-rec\w*|\/s)$/i.test(a));
+}
+
+/** Like splitCommands, but each part says whether it reads the output of the part before it (a pipe). */
+function splitPipeline(command) {
+  const out = [];
+  let current = "";
+  let quote = "";
+  let piped = false;
+  const flush = (nextPiped) => {
+    if (current.trim()) out.push({ text: current.trim(), piped });
+    current = "";
+    piped = nextPiped;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+    } else if (ch === "|" && command[i + 1] !== "|" && command[i - 1] !== "|") flush(true);
+    else if (ch === ";" || ch === "|" || ch === "&" || ch === "\n" || ch === "\r") flush(false);
+    else current += ch;
+  }
+  flush(false);
+  return out;
 }
 
 /** The ready call that replaces a Grep (search) or a Glob (list_files through tools_run). */

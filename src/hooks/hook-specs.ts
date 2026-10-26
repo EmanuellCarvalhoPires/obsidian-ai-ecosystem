@@ -19,7 +19,7 @@ export interface HookSpec {
 
 /** Protection hooks by module. Modules not listed here (Telegram...) have no protection hook. */
 const PROTECTION_SPECS: Record<string, Pick<HookSpec, "event" | "matcher">> = {
-  "ai-vault-search": { event: "PreToolUse", matcher: "Grep|Glob" },
+  "ai-vault-search": { event: "PreToolUse", matcher: "Grep|Glob|Bash|PowerShell" },
   "environment-variables": { event: "PreToolUse", matcher: "Bash|PowerShell" },
   "ai-scripts": { event: "PreToolUse", matcher: "Bash|PowerShell" },
   "ai-templates": { event: "PreToolUse", matcher: "Write" },
