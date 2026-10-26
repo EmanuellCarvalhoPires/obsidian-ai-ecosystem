@@ -53,7 +53,7 @@ describe("normalizeSettings", () => {
       },
       inspector: { maxEntries: 1000 },
       screens: { maxScreens: 12 },
-      toolExposure: { modes: { "claude-code": "indexado", antigravity: "completo", other: "completo" }, fixedTools: ["search_notes"] },
+      toolExposure: { modes: { "claude-code": "indexado", antigravity: "completo", other: "completo" }, fixedTools: ["git_status"] },
     };
     expect(normalizeSettings(valid)).toEqual(valid);
   });
@@ -61,8 +61,10 @@ describe("normalizeSettings", () => {
   it("normalizes the tool exposure: unknown modes fall back to completo, tool names are cleaned", () => {
     expect(normalizeSettings({}).toolExposure).toEqual({
       modes: { "claude-code": "completo", antigravity: "completo", other: "completo" },
-      fixedTools: ["search_notes", "get_section"],
+      fixedTools: [],
     });
+    // Older versions saved the legacy aliases as fixed; they leave the list so the primary tools win.
+    expect(normalizeSettings({ toolExposure: { fixedTools: ["search_notes", "get_section"] } }).toolExposure.fixedTools).toEqual(["get_section"]);
     const odd = normalizeSettings({ toolExposure: { modes: { "claude-code": "x", other: "indexado" }, fixedTools: ["a", "a", "bad name", 3, "b"] } });
     expect(odd.toolExposure).toEqual({ modes: { "claude-code": "completo", antigravity: "completo", other: "indexado" }, fixedTools: ["a", "b"] });
   });

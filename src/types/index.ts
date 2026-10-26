@@ -685,7 +685,15 @@ export interface AIEcosystemSettings {
   toolExposure: ToolExposureSettings;
 }
 
-export const DEFAULT_FIXED_TOOLS: readonly string[] = ["search_notes", "get_section"];
+/**
+ * Extra tools kept in tools/list. Empty: search, find, get_section and read_table are already "fixa" in
+ * AI Vault Search, and the legacy aliases (search_notes, find_notes) stay in the index so the model does not
+ * pick them over the primary tools.
+ */
+export const DEFAULT_FIXED_TOOLS: readonly string[] = [];
+
+/** Aliases that older versions fixed by default; dropped from saved settings. */
+export const LEGACY_FIXED_TOOLS: readonly string[] = ["search_notes", "find_notes"];
 
 export const DEFAULT_SETTINGS: AIEcosystemSettings = {
   port: 27150,

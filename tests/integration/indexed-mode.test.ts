@@ -93,7 +93,7 @@ function modules(r: Rig): void {
     name: "AI Vault Search",
     version: "1.0.0",
     apiVersion: 1,
-    tools: [tool("search_notes", { exposicao: "fixa" }), tool("get_section"), tool("list_files", { resumo: "Lista arquivos de uma pasta do cofre" })],
+    tools: [tool("search_notes", { exposicao: "fixa" }), tool("get_section", { exposicao: "fixa" }), tool("list_files", { resumo: "Lista arquivos de uma pasta do cofre" })],
   };
   const git: HubModuleRegistration = {
     id: "ai-git-tools",
@@ -204,7 +204,7 @@ describe("indexed exposure", () => {
     const r = await start();
     modules(r);
     r.settings.toolExposure.fixedTools = ["git_status"];
-    expect((await listed(r)).sort()).toEqual(["git_status", "search_notes", "tools_describe", "tools_find", "tools_run"]);
+    expect((await listed(r)).sort()).toEqual(["get_section", "git_status", "search_notes", "tools_describe", "tools_find", "tools_run"]);
     r.settings.toolExposure.modes["claude-code"] = "completo";
     expect(await listed(r)).toContain("git_commit");
   });

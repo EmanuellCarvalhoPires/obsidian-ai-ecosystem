@@ -1,5 +1,5 @@
 // Loads and normalizes data.json. Never throws: garbage in, defaults out.
-import { DEFAULT_SETTINGS, SCRIPT_LANGUAGES } from "../types";
+import { DEFAULT_SETTINGS, LEGACY_FIXED_TOOLS, SCRIPT_LANGUAGES } from "../types";
 import type {
   AIEcosystemSettings,
   ClientKind,
@@ -141,7 +141,7 @@ function normalizeExposure(value: unknown): ToolExposureSettings {
   const defaults = DEFAULT_SETTINGS.toolExposure;
   const out: ToolExposureSettings = { modes: { ...defaults.modes }, fixedTools: [...defaults.fixedTools] };
   for (const kind of CLIENT_KINDS) out.modes[kind] = exposureMode(modes[kind]) ?? defaults.modes[kind];
-  if (Array.isArray(raw.fixedTools)) out.fixedTools = parseToolNames(raw.fixedTools);
+  if (Array.isArray(raw.fixedTools)) out.fixedTools = parseToolNames(raw.fixedTools).filter((name) => !LEGACY_FIXED_TOOLS.includes(name));
   return out;
 }
 
