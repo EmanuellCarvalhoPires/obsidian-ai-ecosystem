@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HookWorld, runWithOpenStdin } from "./helpers";
+import { HookWorld, runWithOpenStdin, slash } from "./helpers";
 
 let world: HookWorld;
 beforeEach(() => {
@@ -79,6 +79,56 @@ describe("hook script: ai-vault-search (Grep and Glob)", () => {
     const mixed = world.abs("Knowledge").replace(/^(.)/, (c) => c.toUpperCase()).toUpperCase();
     expect(world.tool(SEARCH, "Grep", { pattern: "x", path: mixed }).decision).toBe("deny");
     expect(world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge").replace(/\\/g, "/") }).decision).toBe("deny");
+  });
+});
+
+describe("hook script: ai-vault-search (shell searches)", () => {
+  beforeEach(() => world.module(SEARCH));
+  const run = (command: string, tool = "Bash", options: { cwd?: string } = {}) => world.tool(SEARCH, tool, { command }, options);
+
+  it("blocks grep, rg, find and recursive listings in the vault and points to search or list_files", () => {
+    for (const command of [
+      "grep -rn acesso .",
+      "rg acesso Knowledge",
+      "find . -name '*.md'",
+      "ls -R",
+      "grep -ri alfa Knowledge/Logs 2>&1",
+      `cd ${slash(world.abs("Knowledge"))} && grep -r x .`,
+      "rtk grep -rn x .",
+    ]) {
+      expect(run(command).decision, command).toBe("deny");
+    }
+    expect(run("grep -rn acesso .").reason).toContain('search {"termos":["acesso"]}');
+    expect(run("find . -name '*.md'").reason).toContain("list_files");
+  });
+
+  it("blocks Select-String and Get-ChildItem -Recurse in PowerShell", () => {
+    expect(run("Select-String -Pattern acesso -Path Knowledge/*.md", "PowerShell").decision).toBe("deny");
+    expect(run("Get-ChildItem -Recurse -Filter *.md", "PowerShell").decision).toBe("deny");
+    expect(run("gci Knowledge -r", "PowerShell").decision).toBe("deny");
+    expect(run("dir /s", "PowerShell").decision).toBe("deny");
+  });
+
+  it("allows a search outside the vault, a filter in a pipe and plain listings", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "aie-shell-"));
+    try {
+      expect(run(`grep -r x ${slash(outside)}`).stdout).toBe("");
+      expect(run("grep x file", "Bash", { cwd: outside }).stdout).toBe("");
+      expect(run("cat a.txt | grep x").stdout).toBe("");
+      expect(run("npm test 2>&1 | grep -i fail").stdout).toBe("");
+      expect(run("ls").stdout).toBe("");
+      expect(run("ls -la Knowledge").stdout).toBe("");
+      expect(run("python scripts/x.py").stdout).toBe("");
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("allows shell searches in .claude, the config folder and the folders left out of the index", () => {
+    world.pastas({ foraDoIndice: ["Arquivo"], notasDeTools: ["MCP"] });
+    for (const dir of [".claude", "Arquivo", "MCP/Jira Cloud"]) {
+      expect(run(`rg x "${dir}"`, "Bash", { cwd: world.abs(dir) }).stdout, dir).toBe("");
+    }
   });
 });
 
