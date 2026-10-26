@@ -23,7 +23,7 @@ describe("hook script: ai-vault-search (Grep and Glob)", () => {
     const run = world.tool(SEARCH, "Grep", { pattern: "acesso", path: world.abs("Knowledge") });
     expect(run.status).toBe(0);
     expect(run.decision).toBe("deny");
-    expect(run.reason).toContain("search_notes");
+    expect(run.reason).toContain("search");
     expect(run.json?.hookSpecificOutput.hookEventName).toBe("PreToolUse");
   });
 
@@ -282,7 +282,7 @@ describe("hook script: modes and the AI_ECOSYSTEM_HOOKS override", () => {
   it("avisar only adds a context for the model, with no permission decision", () => {
     world.config({ modos: { [SEARCH]: "avisar" } });
     const run = call();
-    expect(run.json?.hookSpecificOutput).toEqual({ hookEventName: "PreToolUse", additionalContext: expect.stringContaining("search_notes") });
+    expect(run.json?.hookSpecificOutput).toEqual({ hookEventName: "PreToolUse", additionalContext: expect.stringContaining("search") });
     expect(run.decision).toBeUndefined();
     expect(run.stdout).not.toContain("permissionDecision");
   });
@@ -302,7 +302,7 @@ describe("hook script: modes and the AI_ECOSYSTEM_HOOKS override", () => {
     expect(call({ AI_ECOSYSTEM_HOOKS: "off" }).stdout).toBe("");
     const warned = call({ AI_ECOSYSTEM_HOOKS: "avisar" });
     expect(warned.decision).toBeUndefined();
-    expect(warned.context).toContain("search_notes");
+    expect(warned.context).toContain("search");
     world.config({ modos: { [SEARCH]: "off" } });
     expect(call({ AI_ECOSYSTEM_HOOKS: "bloquear" }).decision).toBe("deny");
     expect(call({ AI_ECOSYSTEM_HOOKS: "nonsense" }).stdout).toBe("");
@@ -320,7 +320,7 @@ describe("hook script: repetition lock", () => {
     expect(third.decision).toBeUndefined();
     expect(third.stdout).not.toContain("permissionDecision");
     expect(third.context).toContain("trava de repetição");
-    expect(third.context).toContain("search_notes");
+    expect(third.context).toContain("search");
     expect(call().decision).toBe("deny");
   });
 

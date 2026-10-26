@@ -122,7 +122,7 @@ describe("hook script: ready calls in the protection messages", () => {
   it("gives search_notes with the words of a Grep and list_files through tools_run for a Glob", () => {
     world.module("ai-vault-search");
     const grep = world.tool("ai-vault-search", "Grep", { pattern: "acesso\\s+alfa", path: world.abs("Knowledge") });
-    expect(grep.reason).toContain('search_notes {"termos":["acesso","alfa"]}');
+    expect(grep.reason).toContain('search {"termos":["acesso","alfa"]}');
     const glob = world.tool("ai-vault-search", "Glob", { pattern: "**/*.md", path: world.abs("Knowledge", "Logs") });
     expect(glob.reason).toContain('tools_run {"id":"list_files","args":{"pasta":"Knowledge/Logs","recursivo":true}}');
   });

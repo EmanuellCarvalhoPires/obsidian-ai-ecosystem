@@ -56,12 +56,12 @@ const GUIDES: ModuleGuide[] = [
       {
         task: { pt: "Buscar, listar ou ler algo dentro do cofre", en: "Search, list or read something inside the vault" },
         plugin: "AI Vault Search",
-        tools: ["search_notes", "list_folders", "list_files", "get_section"],
+        tools: ["search", "find", "get_section", "read_table", "list_folders", "list_files"],
       },
     ],
     advice: {
-      pt: "Para procurar algo dentro do cofre, use `search_notes` (ou `list_files` e `get_section`) em vez de Grep, Glob ou buscas de terminal nas pastas do cofre.",
-      en: "To look for something inside the vault, use `search_notes` (or `list_files` and `get_section`) instead of Grep, Glob or terminal searches in the vault folders.",
+      pt: "Para procurar algo dentro do cofre, use `search` para buscar conteúdo e `find` para buscar nome (ou `get_section`, `read_table`, `list_folders` e `list_files`; `search_notes` e `find_notes` continuam como aliases legados) em vez de Grep, Glob ou buscas de terminal nas pastas do cofre.",
+      en: "To look for something inside the vault, use `search` to search content and `find` to search names (or `get_section`, `read_table`, `list_folders` and `list_files`; `search_notes` and `find_notes` remain as legacy aliases) instead of Grep, Glob or terminal searches in the vault folders.",
     },
   },
   {

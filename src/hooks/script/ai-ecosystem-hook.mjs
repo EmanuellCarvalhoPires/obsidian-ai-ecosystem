@@ -36,7 +36,7 @@ const DEFAULT_MODES = { "ai-git-tools": "avisar" };
 
 const MESSAGES = {
   "ai-vault-search":
-    "Use search_notes, list_files ou get_section (AI Vault Search). O terminal só vale se o plugin estiver fora do ar.",
+    "Use search (conteúdo), find (nome), list_files ou get_section (AI Vault Search). O terminal só vale se o plugin estiver fora do ar.",
   "environment-variables":
     "Este host tem secret no Environment Keys: use search_vault_tools e run_vault_tool (ou http_request com {{secret:NOME}}).",
   "ai-scripts":
@@ -427,14 +427,14 @@ function vaultSearchRule(toolName, toolInput, env) {
   return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`;
 }
 
-/** The ready call that replaces a Grep (search_notes) or a Glob (list_files through tools_run). */
+/** The ready call that replaces a Grep (search) or a Glob (list_files through tools_run). */
 function vaultSearchCall(toolName, toolInput, folder) {
   if (toolName === "Glob") {
     const args = folder ? { pasta: folder, recursivo: true } : { recursivo: true };
-    return `Chamada pronta: tools_run ${JSON.stringify({ id: "list_files", args })} (para buscar por conteúdo, search_notes).`;
+    return `Chamada pronta: tools_run ${JSON.stringify({ id: "list_files", args })} (para buscar por conteúdo, search; por nome, find).`;
   }
   const termos = searchTerms(typeof toolInput.pattern === "string" ? toolInput.pattern : "");
-  return `Chamada pronta: search_notes ${JSON.stringify(termos.length ? { termos } : {})}.`;
+  return `Chamada pronta: search ${JSON.stringify(termos.length ? { termos } : {})}.`;
 }
 
 /** The plain words of a regular expression (escapes like \s and \b dropped), at most 6. */
