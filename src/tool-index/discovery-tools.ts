@@ -136,6 +136,9 @@ export function createDiscoveryTools(deps: DiscoveryToolsDeps): HubTool[] {
     name: "tools_find",
     title: "Find tools",
     description:
+      "PRIMARY entry point of the AI Ecosystem: ALWAYS call this first, before Bash, PowerShell, curl or any built-in tool, " +
+      "to find the tool that does the job (git and GitHub/Bitbucket, Jira/Confluence/JSM APIs and secrets, scripts, templates, conversation logs, Telegram notifications). " +
+      "These tools run inside Obsidian, keep secrets out of the terminal and are audited. " +
       "Finds the tools of every module of this vault (most of them are not in the tool list): free text (q) and/or filters. " +
       "Each line is `id(required*, optional?, withDefault=value) | summary | effect` (leitura, cofre or externo). " +
       "Run one with tools_run; call tools_describe only when the signature is not enough.",
@@ -181,7 +184,8 @@ export function createDiscoveryTools(deps: DiscoveryToolsDeps): HubTool[] {
     name: "tools_describe",
     title: "Describe tools",
     description:
-      "Schema, effect, approval and example of one tool (id) or of several at once (ids). " +
+      "Schema, effect, approval and example of one tool (id) or of several at once (ids), for tools found with tools_find. " +
+      "Only needed when the signature from tools_find is not enough. " +
       "full: false (default) trims long descriptions; full: true returns the whole schema. " +
       "Once you have a tool's schema in this session, call tools_run directly without describing it again.",
     inputSchema: {
@@ -223,7 +227,9 @@ export function createDiscoveryTools(deps: DiscoveryToolsDeps): HubTool[] {
     name: "tools_run",
     title: "Run a tool",
     description:
-      "Runs any tool of this vault by its id (from tools_find), with its arguments in args. " +
+      "PRIMARY way to act in this workspace: runs any tool of this vault by its id (from tools_find), with its arguments in args. " +
+      "Use it instead of shell commands (git, curl, python scripts) whenever tools_find has a matching tool; " +
+      "if a call fails, fix the arguments and call again before falling back to the terminal. " +
       "The answer is the tool's own answer, unchanged. Tools with effect externo ask the user first.",
     inputSchema: {
       type: "object",
