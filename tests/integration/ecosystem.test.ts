@@ -292,12 +292,12 @@ describe("AI Ecosystem wiring", () => {
       writeFile(r.vault, "Scripts/hello.js", 'console.log("hello " + process.argv.slice(2).join(" "));');
 
       const listed = await rpc(r, "tools/call", { name: "ecosystem_list_scripts", arguments: {} });
-      expect(listed.result.structuredContent.scripts).toEqual([{ path: "Scripts/hello.js", language: "node" }]);
+      expect(listed.result.structuredContent.scripts).toEqual(["Scripts/hello.js"]);
 
       const run = await rpc(r, "tools/call", { name: "ecosystem_run_script", arguments: { path: "Scripts/hello.js", args: ["world"] } });
       expect(run.result.isError).toBeFalsy();
       expect(run.result.structuredContent).toMatchObject({ exitCode: 0 });
-      expect(run.result.structuredContent.stdout).toContain("hello world");
+      expect(run.result.content[0].text).toContain("hello world");
 
       const entry = r.eco.logger.entries().find((e) => e.kind === "script");
       expect(entry).toMatchObject({ target: "Scripts/hello.js", status: 200, client: "Claude Code", alert: false });
@@ -326,7 +326,7 @@ describe("AI Ecosystem wiring", () => {
       r.settings.scripts.restrictionsDisabled = true;
       const run = await rpc(r, "tools/call", { name: "ecosystem_run_script", arguments: { language: "node", code: "console.log(6 * 7)" } });
       expect(run.result.isError).toBeFalsy();
-      expect(run.result.structuredContent.stdout).toContain("42");
+      expect(run.result.content[0].text).toContain("42");
       const entry = r.eco.logger.entries().find((e) => e.kind === "script");
       expect(entry?.alert).toBe(true);
     });

@@ -6,7 +6,7 @@ import { ECOSYSTEM_ID } from "../types";
 import type { ClientKind, ModuleInfo, ModuleSetupState, RegisteredTool, RegistryChange } from "../types";
 import { Heartbeat } from "./heartbeat";
 import { HOOK_SCRIPT_SOURCE } from "./hook-script";
-import { CORE_SPECS, HOOK_SCRIPT_NAME, buildCommand, moduleHookSpecs, protectionSpec, setupSpecs } from "./hook-specs";
+import { CORE_SPECS, DISPATCH_SPEC, HOOK_SCRIPT_NAME, buildCommand, moduleHookSpecs, protectionModuleIds, protectionSpec, setupSpecs } from "./hook-specs";
 import type { HookEvent } from "./hook-specs";
 import { HooksServiceImpl } from "./hooks-service";
 import { ModuleStateStore } from "./module-states";
@@ -72,8 +72,6 @@ export interface HooksStatus {
   lastError?: string;
   /** The core's own failure hook is in the settings. */
   coreInstalled: boolean;
-  /** The core's approval hook of tools_run is in the settings. */
-  coreRunApprovalInstalled?: boolean;
   /** Setup state of the core itself. */
   coreEstado?: ModuleSetupState;
   modules: HookModuleRow[];
@@ -275,16 +273,20 @@ export class HookManager {
     return this.states.estado(moduleId) === "pendente_configuracao";
   }
 
-  /** True while some registered module (the core included) still waits for its first setup. */
+  /**
+   * True while some module (the core included) waits for its first setup. A module installed from
+   * the catalog counts from the start of its install, before it registers in the registry.
+   */
   isSetupPending(): boolean {
-    return this.deps.listModules().some((m) => this.states.estado(m.id) === "pendente_configuracao");
+    const ids = new Set([...this.deps.listModules().map((m) => m.id), ...this.states.ids()]);
+    return [...ids].some((id) => this.states.estado(id) === "pendente_configuracao");
   }
 
-  /** A tool call ended: failures set the module's marker, a success clears it. Never throws. */
-  recordToolResult(moduleId: string, isError: boolean): void {
+  /** A tool call ended: a failed call (the handler threw, or the module is not running the tool) sets the module's marker, a success clears it. Never throws. */
+  recordToolResult(moduleId: string, failed: boolean): void {
     if (this.disposed) return;
     try {
-      if (isError) this.state.setFalha(moduleId, Date.now());
+      if (failed) this.state.setFalha(moduleId, Date.now());
       else this.state.clearFalha(moduleId);
     } catch {
       // The marker is only a hint for the hooks.
@@ -303,10 +305,71 @@ export class HookManager {
       if (!node.available) return;
       const result = this.merger.install(this.state.getSettingsFile(), [...CORE_SPECS]);
       this.record(result);
+      // The approval of tools_run is retired: older versions left its entry, so it goes now.
+      for (const file of SETTINGS_FILES) {
+        const removed = this.merger.remove(file, { module: ECOSYSTEM_ID, type: "execucao" });
+        if (!removed.ok) this.record(removed);
+      }
+      this.migrateLegacyProtection();
     } catch (err) {
       this.fail(err);
     }
     this.deps.onChange?.();
+  }
+
+  /**
+   * Older versions wrote one protection entry per module. With Node available, each file that holds
+   * such entries gets the single dispatch entry and loses them; the user's entries stay. A file whose
+   * dispatch entry could not be written keeps its old entries. Never throws.
+   */
+  private migrateLegacyProtection(): void {
+    for (const file of SETTINGS_FILES) {
+      const listed = this.merger.list(file);
+      if (!listed.ok) continue;
+      const legacy = [...new Set(listed.entries.filter((e) => e.type === "protecao" && protectionSpec(e.module) !== undefined).map((e) => e.module))];
+      if (legacy.length === 0) continue;
+      const installed = this.merger.install(file, [DISPATCH_SPEC]);
+      if (!installed.ok) {
+        this.record(installed);
+        continue;
+      }
+      for (const module of legacy) {
+        const removed = this.merger.remove(file, { module, type: "protecao" });
+        if (!removed.ok) this.record(removed);
+      }
+    }
+    this.dropDispatcherIfUnused();
+  }
+
+  /** Whether some module is configured and keeps its hooks, so it needs the dispatch entry. */
+  private dispatcherNeeded(): boolean {
+    return protectionModuleIds().some((id) => {
+      const state = this.states.get(id);
+      return state?.estado === "configurado" && !state.hooksRemovidos;
+    });
+  }
+
+  /** Removes the dispatch entry from both settings files when no module needs it. Returns whether an entry went. */
+  private dropDispatcherIfUnused(): boolean {
+    if (this.dispatcherNeeded()) return false;
+    let changed = false;
+    for (const file of SETTINGS_FILES) {
+      const removed = this.merger.remove(file, { module: ECOSYSTEM_ID, type: "despacho" });
+      if (!removed.ok) this.record(removed);
+      else changed = changed || removed.changed;
+    }
+    return changed;
+  }
+
+  /** Removes the old per-module protection entries of one module from both settings files. */
+  private removeLegacyProtection(moduleId: string): HookActionResult {
+    let changed = false;
+    for (const file of SETTINGS_FILES) {
+      const removed = this.merger.remove(file, { module: moduleId, type: "protecao" });
+      if (!removed.ok) return { ok: false, error: removed.error };
+      changed = changed || removed.changed;
+    }
+    return { ok: true, changed };
   }
 
   /**
@@ -331,14 +394,14 @@ export class HookManager {
   /** The user pressed "Remove hooks": removes the entries and remembers it, so they stay removed. */
   removeByUser(moduleId: string): HookActionResult {
     const result = this.removeModule(moduleId);
-    if (result.ok) {
-      try {
-        this.states.setHooksRemovidos(moduleId, true);
-      } catch (err) {
-        return this.fail(err);
-      }
+    if (!result.ok) return result;
+    try {
+      this.states.setHooksRemovidos(moduleId, true);
+    } catch (err) {
+      return this.fail(err);
     }
-    return result;
+    const dropped = this.dropDispatcherIfUnused();
+    return { ok: true, changed: result.changed || dropped };
   }
 
   /**
@@ -358,7 +421,12 @@ export class HookManager {
       else if (this.states.get(moduleId)?.hooksRemovidos) return { ok: true, changed: false };
       const fallback = defaultMode(moduleId);
       if (fallback !== "bloquear" && !this.state.hasExplicitMode(moduleId)) this.state.setMode(moduleId, fallback);
-      const result = this.record(this.merger.install(this.state.getSettingsFile(), specs));
+      const file = this.state.getSettingsFile();
+      const dispatcher = this.merger.install(file, [DISPATCH_SPEC]);
+      if (!dispatcher.ok) return this.record(dispatcher);
+      const legacy = this.removeLegacyProtection(moduleId);
+      if (!legacy.ok) return this.record(legacy);
+      const result = this.record({ ok: true, changed: dispatcher.changed || legacy.changed });
       this.deps.onChange?.();
       return result;
     } catch (err) {
@@ -410,6 +478,7 @@ export class HookManager {
         if (!result.ok) return result;
         changed = changed || result.changed;
       }
+      changed = this.dropDispatcherIfUnused() || changed;
       this.deps.onChange?.();
       return { ok: true, changed };
     } catch (err) {
@@ -423,7 +492,7 @@ export class HookManager {
     const settingsFile = this.state.getSettingsFile();
     return {
       settingsPath: this.merger.settingsPath(settingsFile),
-      entries: moduleHookSpecs(moduleId).map((spec) => ({
+      entries: (protectionSpec(moduleId) ? [DISPATCH_SPEC] : []).map((spec) => ({
         event: spec.event,
         matcher: spec.matcher,
         command: buildCommand(this.state.vaultPath, spec.module, spec.type),
@@ -471,8 +540,15 @@ export class HookManager {
     const registered = new Map(this.deps.listModules().map((m) => [m.id, m.name]));
     const ids = new Set([...registered.keys(), ...this.states.ids()]);
     ids.delete(ECOSYSTEM_ID);
+    const dispatch = entries.find((e) => e.module === ECOSYSTEM_ID && e.type === "despacho");
     const modules: HookModuleRow[] = [...ids].map((id) => {
       const stored = this.states.get(id);
+      const installed = entries.filter((e) => e.module === id);
+      // The dispatch entry covers a configured module that keeps its hooks: it shows as its protection entry.
+      const covered = dispatch !== undefined && protectionSpec(id) !== undefined && stored?.estado === "configurado" && !stored.hooksRemovidos;
+      if (dispatch && covered && !installed.some((e) => e.type === "protecao")) {
+        installed.push({ module: id, type: "protecao", event: dispatch.event, matcher: dispatch.matcher, command: dispatch.command });
+      }
       return {
         id,
         name: registered.get(id) ?? stored?.nome ?? id,
@@ -481,7 +557,7 @@ export class HookManager {
         origem: stored?.origem,
         mode: this.state.getMode(id),
         hasProtection: protectionSpec(id) !== undefined,
-        installed: entries.filter((e) => e.module === id),
+        installed,
         setupHook: entries.some((e) => e.module === id && e.type === "setup"),
       };
     });
@@ -492,7 +568,6 @@ export class HookManager {
       settingsPath: this.merger.settingsPath(settingsFile),
       lastError: this.lastError ?? unreadable,
       coreInstalled: entries.some((e) => e.module === ECOSYSTEM_ID && e.type === "falha"),
-      coreRunApprovalInstalled: entries.some((e) => e.module === ECOSYSTEM_ID && e.type === "execucao"),
       coreEstado: this.states.estado(ECOSYSTEM_ID),
       modules,
     };

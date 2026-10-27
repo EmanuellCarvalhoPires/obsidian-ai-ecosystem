@@ -39,6 +39,7 @@ export interface ServerHostOptions {
   /** tools/list exposure per kind of client (see McpHostOptions). */
   getToolExposure?: McpHostOptions["getToolExposure"];
   isListedWhenIndexed?: McpHostOptions["isListedWhenIndexed"];
+  isListedWhenComplete?: McpHostOptions["isListedWhenComplete"];
   getIndexedInstructions?: McpHostOptions["getIndexedInstructions"];
   onStatusChange?: (status: ServerStatus) => void;
   /** Default 10 MB. */
@@ -221,6 +222,7 @@ export class ServerHost {
       onToolResult: opts.onToolResult,
       getToolExposure: opts.getToolExposure,
       isListedWhenIndexed: opts.isListedWhenIndexed,
+      isListedWhenComplete: opts.isListedWhenComplete,
       getIndexedInstructions: opts.getIndexedInstructions,
     });
     // An ephemeral configured port (0) has no "other" port to compare with.

@@ -51,7 +51,7 @@ const GUIDES: ModuleGuide[] = [
       {
         task: { pt: "Pedir dados ao usuário em uma tela do Obsidian", en: "Ask the user for data in an Obsidian screen" },
         plugin: "AI Ecosystem",
-        tools: ["tela_criar", "tela_listar"],
+        tools: ["tela_gerenciar", "tela_listar"],
       },
     ],
   },
@@ -61,12 +61,12 @@ const GUIDES: ModuleGuide[] = [
       {
         task: { pt: "Buscar, listar ou ler algo dentro do cofre", en: "Search, list or read something inside the vault" },
         plugin: "AI Vault Search",
-        tools: ["search", "find", "get_section", "read_table", "list_folders", "list_files"],
+        tools: ["search", "find", "get_section", "get_note", "read_table", "list_folders", "list_files", "list_tags", "recent_notes"],
       },
     ],
     advice: {
-      pt: "Para procurar algo dentro do cofre, use `search` para buscar conteúdo e `find` para buscar nome (ou `get_section`, `read_table`, `list_folders` e `list_files`; `search_notes` e `find_notes` continuam como aliases legados) em vez de Grep, Glob ou buscas de terminal nas pastas do cofre.",
-      en: "To look for something inside the vault, use `search` to search content and `find` to search names (or `get_section`, `read_table`, `list_folders` and `list_files`; `search_notes` and `find_notes` remain as legacy aliases) instead of Grep, Glob or terminal searches in the vault folders.",
+      pt: "Para procurar algo dentro do cofre, use `search` para buscar conteúdo e `find` para buscar nome (ou `get_section`, `get_note`, `read_table`, `list_folders`, `list_files`, `list_tags` e `recent_notes`) em vez de Grep, Glob ou buscas de terminal nas pastas do cofre.",
+      en: "To look for something inside the vault, use `search` to search content and `find` to search names (or `get_section`, `get_note`, `read_table`, `list_folders`, `list_files`, `list_tags` and `recent_notes`) instead of Grep, Glob or terminal searches in the vault folders.",
     },
   },
   {

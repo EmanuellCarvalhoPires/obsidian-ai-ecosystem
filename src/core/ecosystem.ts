@@ -14,6 +14,7 @@ import { ModuleRegistry } from "../registry/module-registry";
 import { ServiceBus } from "../registry/service-bus";
 import { BinaryDetector } from "../runner/binary-detector";
 import { ScriptEngine } from "../runner/script-engine";
+import type { ScriptsLookup } from "../runner/script-tools";
 import type { ScreenHost } from "../screens/host";
 import { ScreenService } from "../screens/service";
 import { ToolFederation } from "../tool-index/federation";
@@ -30,6 +31,7 @@ import {
   DISCOVERY_TOOL_NAMES,
   ECOSYSTEM_ID,
   HOOKS_SERVICE,
+  SCRIPTS_SERVICE,
   SECRETS_SERVICE,
   SUPPORTED_API_VERSIONS,
 } from "../types";
@@ -129,7 +131,7 @@ export class Ecosystem {
     });
     if (deps.vaultBasePath) {
       try {
-        const dbPath = `${deps.vaultBasePath}/.obsidian/plugins/ai-ecosystem/activity.sqlite`;
+        const dbPath = nodePath.join(deps.vaultBasePath, deps.configDir ?? ".obsidian", "plugins", "ai-ecosystem", "activity.sqlite");
         this.database = new ActivityDatabase({ filePath: dbPath });
       } catch (err) {
         console.warn("[AI Ecosystem] Could not initialize ActivityDatabase, falling back to memory", err);
@@ -210,9 +212,10 @@ export class Ecosystem {
         vaultName: deps.vaultName,
         getMcpInstructions: () => BASE_MCP_INSTRUCTIONS,
         isToolHidden: (registered, kind) => this.hooks?.isToolHidden(registered, kind) ?? false,
-        onToolResult: (moduleId, isError) => this.hooks?.recordToolResult(moduleId, isError),
+        onToolResult: (moduleId, failed) => this.hooks?.recordToolResult(moduleId, failed),
         getToolExposure: (kind) => this.toolExposure(kind),
         isListedWhenIndexed: (registered) => this.isListedWhenIndexed(registered),
+        isListedWhenComplete: (registered) => this.isListedWhenComplete(registered),
         getIndexedInstructions: () => INDEXED_MCP_INSTRUCTIONS,
         ...deps.serverOptions,
         onStatusChange: (status) => this.handleStatus(status),
@@ -255,6 +258,8 @@ export class Ecosystem {
     // get lifecycle events, this one is part of the AI Ecosystem itself.
     this.builtin = {
       version: deps.version,
+      vaultBasePath: deps.vaultBasePath,
+      configDir: deps.configDir,
       getServerStatus: () => this.server.getStatus(),
       listModules: () => this.registry.listModules(),
       listServices: () => this.bus.list(),
@@ -265,6 +270,7 @@ export class Ecosystem {
         vaultBasePath: deps.vaultBasePath,
         getSettings: () => deps.getSettings().scripts,
         getDeclaredScripts: deps.getDeclaredScripts,
+        getScriptsService: () => this.bus.get<ScriptsLookup>(SCRIPTS_SERVICE),
       },
       screens: this.screens,
       setup: this.setup,
@@ -273,7 +279,7 @@ export class Ecosystem {
         findTool: (name) => this.registry.findTool(name),
         getService: <T>(name: string) => this.bus.get<T>(name),
         isHidden: (moduleId, tool, kind) => (kind ? (this.hooks?.isModuleHidden(moduleId, kind, tool?.availableDuringSetup === true) ?? false) : false),
-        onToolResult: (moduleId, isError) => this.hooks?.recordToolResult(moduleId, isError),
+        onToolResult: (moduleId, failed) => this.hooks?.recordToolResult(moduleId, failed),
       },
     };
     const registered = this.registry.register(createBuiltinModule(this.builtin));
@@ -298,6 +304,16 @@ export class Ecosystem {
     if (fixed.includes(tool.name)) return true;
     if (!this.hooks?.isSetupPending()) return false;
     return (moduleId === ECOSYSTEM_ID && tool.name.startsWith("ecosystem_setup_")) || tool.availableDuringSetup === true;
+  }
+
+  /**
+   * What stays in tools/list in "completo" mode: the core's setup tools only while the setup is
+   * pending (they are still callable by name). Without the hooks there is no setup state: all listed.
+   */
+  isListedWhenComplete(registered: RegisteredTool): boolean {
+    if (registered.moduleId !== ECOSYSTEM_ID || !registered.tool.name.startsWith("ecosystem_setup_")) return true;
+    if (!this.hooks) return true;
+    return this.hooks.isSetupPending();
   }
 
   /** Writes the core's own tools.db (its tools without the discovery ones). Never throws. */

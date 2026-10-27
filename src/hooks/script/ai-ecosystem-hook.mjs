@@ -1,15 +1,15 @@
 // AI Ecosystem hook for Claude Code. Usage: node ai-ecosystem-hook.mjs <module> <type>
 //
 // Written by the AI Ecosystem plugin to <vault>/.claude/ai-ecosystem/hooks/ and registered
-// in the Claude Code settings. Types: protecao (PreToolUse), setup (SessionStart, UserPromptSubmit), falha
-// (PostToolUseFailure), aprovacao (retired: no decision, kept so old settings entries stay harmless),
-// execucao (PreToolUse of tools_run).
-// Plain Node, no dependencies, no network (execucao reads the tools.db files with node:sqlite).
+// in the Claude Code settings. Types: protecao (PreToolUse), despacho (PreToolUse: the protection of every
+// module in one process), setup (SessionStart, UserPromptSubmit), falha (PostToolUseFailure), resumo
+// (SessionStart: short summary of the active modules), aprovacao and execucao
+// (both retired: no decision, kept so old settings entries stay harmless).
+// Plain Node, no dependencies, no network.
 //
 // This script must never get in the way of the agent: any problem (missing or invalid state
 // file, unexpected input, exception, more than 2 seconds) ends with exit code 0 and no
-// output, which lets the tool call proceed. The exception is the type execucao: it never fails
-// open, any problem there still makes Claude Code ask the user.
+// output, which lets the tool call proceed.
 //
 // The script never answers permissionDecision "allow": that would approve the call and skip the
 // normal Claude Code permission prompt. A reminder (mode avisar, repetition lock) goes out as
@@ -25,11 +25,6 @@ const LOCK_WINDOW_MS = 10 * 60_000;
 const LOCK_PASS_ATTEMPT = 3;
 const WINDOWS = process.platform === "win32";
 const TYPE = process.argv[3];
-const GENERIC_RUN = "Posso executar esta tool pelo tools_run?";
-/** aprovacao values with a fixed meaning (anything else is a question template). */
-const APPROVAL_REQUIRED = "obrigatoria";
-const APPROVAL_WAIVED = "dispensada";
-const TOOL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 /** Mode of a module with no entry in config.modos (same table as defaultMode in state-dir.ts). */
 const DEFAULT_MODES = { "ai-git-tools": "avisar" };
@@ -56,15 +51,14 @@ const GIT_HOSTS = ["api.github.com", "github.com", "api.bitbucket.org", "bitbuck
 // Entry point
 // ---------------------------------------------------------------------------
 
-/** Ends the process without output (the call proceeds). For execucao it asks the user instead. */
+/** Ends the process without output (the call proceeds). */
 function allow() {
-  if (TYPE === "execucao") return askApproval(GENERIC_RUN);
   process.exit(0);
 }
 
 let answered = false;
 
-/** No decision and no output: the user's normal permission rules decide (used by execucao). */
+/** No decision and no output: the user's normal permission rules decide (used by aprovacao and execucao). */
 function pass() {
   if (answered) return;
   answered = true;
@@ -99,13 +93,11 @@ function main() {
     if (!isObject(input)) return allow();
     try {
       if (type === "protecao") return protect(stateDir, moduleId, input);
+      if (type === "despacho") return dispatch(stateDir, input);
       if (type === "setup") return setup(stateDir, moduleId, input);
       if (type === "falha") return failure(stateDir, input);
-      if (type === "aprovacao") return pass();
-      if (type === "execucao") {
-        execution(stateDir, input).catch(() => allow());
-        return;
-      }
+      if (type === "resumo") return summary(stateDir, input);
+      if (type === "aprovacao" || type === "execucao") return pass();
     } catch {
       // Fail open.
     }
@@ -184,20 +176,31 @@ function coreIsAlive(stateDir) {
 // ---------------------------------------------------------------------------
 
 function protect(stateDir, moduleId, input) {
-  if (!coreIsAlive(stateDir)) return allow();
+  const decision = evaluateProtection(stateDir, moduleId, input);
+  if (decision.kind === "allow") return allow();
+  if (decision.kind === "remind") return respond(remind(decision.message));
+  return block(stateDir, input, decision.message);
+}
+
+/**
+ * Decides one module's rule for a tool call without answering or writing anything:
+ * { kind: "allow" }, { kind: "remind", message } (mode avisar) or { kind: "block", message } (mode bloquear).
+ */
+function evaluateProtection(stateDir, moduleId, input) {
+  if (!coreIsAlive(stateDir)) return { kind: "allow" };
 
   const state = readJson(stateDir, `modules/${moduleId}.json`);
-  if (!isObject(state) || state.estado !== "configurado") return allow();
+  if (!isObject(state) || state.estado !== "configurado") return { kind: "allow" };
 
-  if (isCorrupt(stateDir, "falhas.json")) return allow();
+  if (isCorrupt(stateDir, "falhas.json")) return { kind: "allow" };
   const failures = readJson(stateDir, "falhas.json");
   const failedAt = isObject(failures) ? Number(failures[moduleId]) : NaN;
-  if (Number.isFinite(failedAt) && Date.now() - failedAt < FAILURE_TTL_MS) return allow();
+  if (Number.isFinite(failedAt) && Date.now() - failedAt < FAILURE_TTL_MS) return { kind: "allow" };
 
   const config = readJson(stateDir, "config.json");
-  if (!isObject(config) || typeof config.vaultPath !== "string") return allow();
+  if (!isObject(config) || typeof config.vaultPath !== "string") return { kind: "allow" };
   const mode = resolveMode(config, moduleId);
-  if (mode === "off") return allow();
+  if (mode === "off") return { kind: "allow" };
 
   const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
   const toolInput = isObject(input.tool_input) ? input.tool_input : {};
@@ -210,9 +213,16 @@ function protect(stateDir, moduleId, input) {
   };
 
   const message = matchRule(moduleId, toolName, toolInput, env);
-  if (!message) return allow();
+  if (!message) return { kind: "allow" };
 
-  if (mode === "avisar") return respond(remind(message));
+  if (mode === "avisar") return { kind: "remind", message };
+  return { kind: "block", message };
+}
+
+/** The block mode: the repetition lock may let the 3rd identical attempt through, otherwise the call is denied. */
+function block(stateDir, input, message) {
+  const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
+  const toolInput = isObject(input.tool_input) ? input.tool_input : {};
 
   if (isCorrupt(stateDir, "bloqueios.json")) {
     writeJson(stateDir, "bloqueios.json", {});
@@ -225,132 +235,6 @@ function protect(stateDir, moduleId, input) {
   respond({
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: message },
   });
-}
-
-// ---------------------------------------------------------------------------
-// execucao (PreToolUse of tools_run)
-// ---------------------------------------------------------------------------
-
-/**
- * Reads the efeito and aprovacao of the tool being run from the tools.db files. "externo" (or an
- * aprovacao policy) asks the user; "leitura" and "cofre" make no decision, so the user's normal
- * permission rules apply. An unknown id, a missing index or any problem asks (never fails open).
- */
-async function execution(stateDir, input) {
-  const toolInput = isObject(input.tool_input) ? input.tool_input : {};
-  const id = typeof toolInput.id === "string" ? toolInput.id.trim() : "";
-  if (!TOOL_ID.test(id)) return askApproval(GENERIC_RUN);
-  const args = toolArgs(toolInput.args);
-  const row = await findIndexedTool(stateDir, id);
-  if (!row) return askApproval(`Posso executar ${id} pelo tools_run? Essa tool não está em nenhum índice (tools.db), então o efeito dela é desconhecido.`);
-  const question = runQuestion(id, row, args);
-  if (question) return askApproval(question);
-  pass();
-}
-
-/** The arguments of a tools_run call (an object, or JSON text of one). */
-function toolArgs(value) {
-  if (isObject(value)) return value;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (isObject(parsed)) return parsed;
-    } catch {
-      // Not JSON.
-    }
-  }
-  return {};
-}
-
-/** The question to ask for this tool, or undefined to make no decision. */
-function runQuestion(id, row, args) {
-  const policy = typeof row.aprovacao === "string" ? row.aprovacao.trim() : "";
-  if (policy === APPROVAL_WAIVED) return undefined;
-  const harmless = row.efeito === "leitura" || row.efeito === "cofre";
-  if (policy === "" && harmless) return undefined;
-  if (policy !== "" && policy !== APPROVAL_REQUIRED) {
-    const filled = fillTemplate(policy, args);
-    if (filled) return filled;
-  }
-  return `Posso executar ${id} (módulo ${oneLine(row.moduleId, 64)}, efeito ${oneLine(row.efeito, 16)})?`;
-}
-
-/** Fills {name} with the argument values; undefined when one is missing or not a plain value. */
-function fillTemplate(template, args) {
-  let missing = false;
-  const out = template.replace(/\{([A-Za-z0-9_]+)\}/g, (_, key) => {
-    const value = plainValue(args[key]);
-    if (value === undefined) missing = true;
-    return value ?? "";
-  });
-  if (missing || /[\r\n]/.test(out) || out.length > 300) return undefined;
-  return out;
-}
-
-function plainValue(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (typeof value === "boolean") return String(value);
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  return text === "" || text.length > 200 || /[\r\n]/.test(text) ? undefined : text;
-}
-
-function oneLine(value, max) {
-  const text = String(value ?? "?").replace(/[\r\n]+/g, " ").trim();
-  return text.length > max ? `${text.slice(0, max)}…` : text || "?";
-}
-
-/** The index row of a tool: the module of tools.json first, then every plugin folder with a tools.db. */
-async function findIndexedTool(stateDir, id) {
-  const config = readJson(stateDir, "config.json");
-  if (!isObject(config) || typeof config.vaultPath !== "string" || config.vaultPath === "") return undefined;
-  const configDir = typeof config.configDir === "string" && config.configDir !== "" ? config.configDir : ".obsidian";
-  const pluginsDir = path.join(config.vaultPath, configDir, "plugins");
-  let dirs;
-  try {
-    dirs = fs.readdirSync(pluginsDir);
-  } catch {
-    return undefined;
-  }
-  const tools = readJson(stateDir, "tools.json");
-  const owner = isObject(tools) && typeof tools[id] === "string" ? tools[id] : undefined;
-  const ordered = owner ? [owner, ...dirs.filter((d) => d !== owner)] : dirs;
-  let sqlite;
-  try {
-    sqlite = await import("node:sqlite");
-  } catch {
-    return undefined; // Node.js without node:sqlite: the caller asks.
-  }
-  for (const dir of ordered) {
-    if (!/^[A-Za-z0-9._-]+$/.test(dir) || dir === "." || dir === "..") continue;
-    const file = path.join(pluginsDir, dir, "tools.db");
-    if (!fs.existsSync(file)) continue;
-    let db;
-    try {
-      db = new sqlite.DatabaseSync(file, { readOnly: true });
-      const row = db.prepare("SELECT module_id, efeito, aprovacao FROM tools WHERE name = ?").get(id);
-      if (row) return { moduleId: String(row.module_id), efeito: String(row.efeito), aprovacao: typeof row.aprovacao === "string" ? row.aprovacao : null };
-    } catch {
-      // Not a usable index: try the next one.
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        // Already closed.
-      }
-    }
-  }
-  return undefined;
-}
-
-function prNumber(value) {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
-  if (typeof value === "string" && /^\d{1,10}$/.test(value.trim()) && Number(value) > 0) return Number(value);
-  return undefined;
-}
-
-function askApproval(reason) {
-  respond({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } });
 }
 
 /** A reminder for the model with no permission decision: the normal permission prompt still applies. */
@@ -899,6 +783,41 @@ function repeatedThreeTimes(stateDir, toolName, toolInput) {
 }
 
 // ---------------------------------------------------------------------------
+// despacho (PreToolUse): the protection of every module in one process
+// ---------------------------------------------------------------------------
+
+/** Same table as PROTECTION_SPECS in hook-specs.ts (a test keeps them in sync). */
+const PROTECTION_MODULES = [
+  ["ai-vault-search", "Grep|Glob|Bash|PowerShell"],
+  ["environment-variables", "Bash|PowerShell"],
+  ["ai-scripts", "Bash|PowerShell"],
+  ["ai-templates", "Write"],
+  ["ai-git-tools", "Bash|PowerShell"],
+];
+
+/**
+ * Each module is decided by evaluateProtection, as its own hook would. The first block (in the table
+ * order) goes through block() once; without a block, the reminders of all matching modules are joined.
+ */
+function dispatch(stateDir, input) {
+  if (!coreIsAlive(stateDir)) return allow();
+  const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
+  const reminders = [];
+  let blocked;
+  for (const [id, matcher] of PROTECTION_MODULES) {
+    if (!new RegExp(`^(?:${matcher})$`).test(toolName)) continue;
+    const state = readJson(stateDir, `modules/${id}.json`);
+    if (isObject(state) && state.hooksRemovidos === true) continue;
+    const decision = evaluateProtection(stateDir, id, input);
+    if (decision.kind === "remind") reminders.push(decision.message);
+    else if (decision.kind === "block" && blocked === undefined) blocked = decision.message;
+  }
+  if (blocked !== undefined) return block(stateDir, input, blocked);
+  if (reminders.length > 0) return respond(remind(reminders.join("\n")));
+  allow();
+}
+
+// ---------------------------------------------------------------------------
 // setup (SessionStart, UserPromptSubmit) and falha (PostToolUseFailure)
 // ---------------------------------------------------------------------------
 
@@ -922,6 +841,11 @@ function failure(stateDir, input) {
   const parts = toolName.split("__");
   if (parts.length < 3 || parts[0] !== "mcp") return allow();
   let tool = parts.slice(2).join("__");
+  // A wrong argument or unknown id is an answer of the core, not a failure of the module.
+  const message = typeof input.error === "string" ? input.error.trim() : "";
+  if (/^(Invalid arguments|Unknown tool)/.test(message)) return allow();
+  // A batch (calls) has no single id: the tool resolved would be tools_run itself, so nothing is marked.
+  if (tool === "tools_run" && isObject(input.tool_input) && Array.isArray(input.tool_input.calls)) return allow();
   // A failure inside tools_run belongs to the module of the tool it ran.
   if (tool === "tools_run" && isObject(input.tool_input) && typeof input.tool_input.id === "string") tool = input.tool_input.id.trim();
   const tools = readJson(stateDir, "tools.json");
@@ -932,4 +856,47 @@ function failure(stateDir, input) {
   next[moduleId] = Date.now();
   writeJson(stateDir, "falhas.json", next);
   allow();
+}
+
+// ---------------------------------------------------------------------------
+// resumo (SessionStart)
+// ---------------------------------------------------------------------------
+
+/** At the start of a session: one short line with the active and the pending modules (at most 300 characters). */
+function summary(stateDir, input) {
+  if (process.env.AI_ECOSYSTEM_HOOKS === "off") return allow();
+  if (input.hook_event_name !== "SessionStart") return allow();
+  if (!coreIsAlive(stateDir)) return allow();
+  // With the core still pending, the setup hook already talks to the agent.
+  const core = readJson(stateDir, "modules/ai-ecosystem.json");
+  if (!isObject(core) || core.estado !== "configurado") return allow();
+
+  let files;
+  try {
+    files = fs.readdirSync(path.join(stateDir, "modules")).sort();
+  } catch {
+    return allow();
+  }
+  const active = [];
+  const pending = [];
+  for (const file of files) {
+    if (!file.endsWith(".json") || file.endsWith(".configurado.json")) continue;
+    const id = file.slice(0, -5);
+    if (id === "ai-ecosystem") continue;
+    const state = readJson(stateDir, `modules/${file}`);
+    if (!isObject(state)) continue;
+    if (state.estado === "configurado") active.push(id);
+    else if (state.estado === "pendente_configuracao") pending.push(id);
+  }
+  if (active.length === 0 && pending.length === 0) return allow();
+
+  const parts = ["AI Ecosystem ativo."];
+  if (active.length > 0) parts.push(`Módulos: ${active.join(", ")}.`);
+  if (pending.length > 0) {
+    parts.push(`Pendentes: ${pending.map((id) => `${id} (skill configurar-${id})`).join(", ")}.`);
+  }
+  parts.push("Ache tools com tools_find; ecosystem_status só se precisar de detalhes.");
+  let text = parts.join(" ");
+  if (text.length > 300) text = `${text.slice(0, 299)}…`;
+  respond({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } });
 }

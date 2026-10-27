@@ -32,7 +32,7 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-describe("tela_criar", () => {
+describe("tela_gerenciar (criar)", () => {
   it("opens the preview and saves nothing before the user approves", async () => {
     const pending = rig.service.create({ definicao: sampleDefinition() }, ctx());
     await flush();
@@ -57,7 +57,7 @@ describe("tela_criar", () => {
 
     expect(files()).toEqual(["cadastro_cliente.json"]);
     expect(rig.changes).toBe(1);
-    expect(toolNames()).toEqual(["tela_criar", "tela_listar", "tela_editar", "tela_remover", "tela_cadastro_cliente"]);
+    expect(toolNames()).toEqual(["tela_gerenciar", "tela_listar", "tela_remover", "tela_cadastro_cliente"]);
     expect(rig.service.get("cadastro_cliente")?.campos).toHaveLength(2);
   });
 
@@ -126,11 +126,11 @@ describe("tela_criar", () => {
     expect(resultText(result)).toContain("reserved");
   });
 
-  it("refuses a slug that already exists and points to tela_editar", async () => {
+  it("refuses a slug that already exists and points to tela_gerenciar", async () => {
     seed(rig, sampleDefinition());
     const result = await rig.service.create({ definicao: sampleDefinition() }, ctx());
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("tela_editar");
+    expect(resultText(result)).toContain("tela_gerenciar");
     expect(rig.host.previews).toHaveLength(0);
   });
 
@@ -190,7 +190,7 @@ describe("tela_criar", () => {
   });
 });
 
-describe("tela_editar and tela_remover", () => {
+describe("tela_gerenciar (editar) e tela_remover", () => {
   beforeEach(() => seed(rig, sampleDefinition()));
 
   it("shows the new version next to the saved one and replaces it only on approval", async () => {
@@ -532,7 +532,7 @@ describe("persistence", () => {
 
     const reloaded = new ScreenService({ store: rig.store, host: rig.host, getLimit: () => 30, getSecrets: () => undefined, onChange: () => undefined });
     expect(reloaded.load()).toEqual([]);
-    expect(createScreenTools(reloaded).map((t) => t.name)).toEqual(["tela_criar", "tela_listar", "tela_editar", "tela_remover", "tela_a", "tela_b"]);
+    expect(createScreenTools(reloaded).map((t) => t.name)).toEqual(["tela_gerenciar", "tela_listar", "tela_remover", "tela_a", "tela_b"]);
   });
 
   it("skips files that are not valid and reports them", () => {

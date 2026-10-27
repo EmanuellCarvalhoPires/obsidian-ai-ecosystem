@@ -1,6 +1,9 @@
 // ecosystem_diagnostico: the report with every module there, with part of the suite missing,
 // that nothing sensitive reaches the output, and the json format.
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildDiagnostic, createDiagnosticTool, formatDiagnosticText, SUITE_MODULES } from "../../src/core/diagnostic";
 import type { DiagnosticDeps } from "../../src/core/diagnostic";
 import type { HooksStatus } from "../../src/hooks/hook-manager";
@@ -154,6 +157,80 @@ describe("ecosystem_diagnostico with part of the suite missing", () => {
   });
 });
 
+describe("ecosystem_diagnostico with a module changed on disk", () => {
+  const vaults: string[] = [];
+  const CONFIG_DIR = ".obsidian";
+
+  /** A temporary vault with the plugin folder of ai-git-tools (manifest and main.js), or none. */
+  function makeVault(options: { manifestVersion?: string; mainMtime?: Date } | "none" = {}): string {
+    const vault = fs.mkdtempSync(path.join(os.tmpdir(), "ai-eco-diag-"));
+    vaults.push(vault);
+    if (options === "none") return vault;
+    const dir = path.join(vault, CONFIG_DIR, "plugins", "ai-git-tools");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ id: "ai-git-tools", version: options.manifestVersion ?? "1.0.0" }));
+    fs.writeFileSync(path.join(dir, "main.js"), "// plugin");
+    if (options.mainMtime) fs.utimesSync(path.join(dir, "main.js"), options.mainMtime, options.mainMtime);
+    return vault;
+  }
+
+  /** The suite registered with ai-git-tools at the given version and registration time. */
+  function loaded(version: string, registeredAt: number): () => ModuleInfo[] {
+    return () => SUITE_MODULES.map((m) => ({ ...info(m.id), ...(m.id === "ai-git-tools" ? { version, registeredAt } : {}) }));
+  }
+
+  const staleFindings = (report: { achados: Array<{ id: string }> }) => report.achados.filter((f) => f.id.startsWith("defasado:"));
+
+  afterEach(() => {
+    for (const vault of vaults.splice(0)) fs.rmSync(vault, { recursive: true, force: true });
+  });
+
+  it("reports nothing when the version matches and main.js is older than the registration", async () => {
+    const now = Date.now();
+    const vault = makeVault({ manifestVersion: "1.0.0", mainMtime: new Date(now - 60_000) });
+    const report = await buildDiagnostic(deps({ vaultBasePath: vault, configDir: CONFIG_DIR, listModules: loaded("1.0.0", now) }));
+    expect(staleFindings(report)).toEqual([]);
+  });
+
+  it("warns when the manifest.json on disk has another version, with both versions in the message", async () => {
+    const now = Date.now();
+    const vault = makeVault({ manifestVersion: "9.9.9", mainMtime: new Date(now - 60_000) });
+    const report = await buildDiagnostic(deps({ vaultBasePath: vault, configDir: CONFIG_DIR, listModules: loaded("1.0.0", now) }));
+    const stale = report.achados.find((f) => f.id === "defasado:ai-git-tools");
+    expect(stale).toMatchObject({ area: "modulos", severidade: "aviso" });
+    expect(stale?.mensagem).toContain("1.0.0");
+    expect(stale?.mensagem).toContain("9.9.9");
+    expect(stale?.acao).toBeTruthy();
+  });
+
+  it("warns when main.js changed after the registration, even with the same version", async () => {
+    const vault = makeVault({ manifestVersion: "1.0.0", mainMtime: new Date() });
+    const report = await buildDiagnostic(deps({ vaultBasePath: vault, configDir: CONFIG_DIR, listModules: loaded("1.0.0", 1) }));
+    const stale = report.achados.find((f) => f.id === "defasado:ai-git-tools");
+    expect(stale).toMatchObject({ area: "modulos", severidade: "aviso" });
+    expect(stale?.mensagem).toContain("o main.js em disco foi alterado depois de o módulo ser carregado.");
+  });
+
+  it("gives no finding when the plugin folder is not there", async () => {
+    const vault = makeVault("none");
+    const report = await buildDiagnostic(deps({ vaultBasePath: vault, configDir: CONFIG_DIR, listModules: loaded("1.0.0", 1) }));
+    expect(staleFindings(report)).toEqual([]);
+  });
+
+  it("never carries the vault path in a message or action", async () => {
+    const vault = makeVault({ manifestVersion: "9.9.9", mainMtime: new Date() });
+    const tool = createDiagnosticTool(deps({ vaultBasePath: vault, configDir: CONFIG_DIR, listModules: loaded("1.0.0", 1) }));
+    for (const formato of ["texto", "json"]) {
+      const result = await tool.handler({ formato }, ctx);
+      const everything = JSON.stringify(result);
+      expect(staleFindings({ achados: (result.structuredContent as { achados: Array<{ id: string }> }).achados }).length, formato).toBeGreaterThan(0);
+      expect(everything, formato).not.toContain(path.basename(vault));
+      expect(everything, formato).not.toContain(vault.replace(/\\/g, "/"));
+      expect(everything, formato).not.toContain(vault.replace(/\\/g, "\\\\"));
+    }
+  });
+});
+
 describe("ecosystem_diagnostico output", () => {
   it("never carries a secret name or value, a token, a chat id or a user path", async () => {
     const tool = createDiagnosticTool(
@@ -163,10 +240,13 @@ describe("ecosystem_diagnostico output", () => {
         getService: services({ telegram: { token: TOKEN, chatId: CHAT_ID } }),
       }),
     );
-    for (const formato of ["texto", "json"]) {
-      const result = await tool.handler({ formato }, ctx);
-      const everything = JSON.stringify(result);
-      for (const sentinel of [SECRET_NAME, SECRET_VALUE, TOKEN, CHAT_ID, "sentinel-user", "SENTINEL"]) expect(everything, `${formato}: ${sentinel}`).not.toContain(sentinel);
+    for (const completo of [false, true]) {
+      for (const formato of ["texto", "json"]) {
+        const result = await tool.handler({ formato, completo }, ctx);
+        const everything = JSON.stringify(result);
+        for (const sentinel of [SECRET_NAME, SECRET_VALUE, TOKEN, CHAT_ID, "sentinel-user", "SENTINEL"])
+          expect(everything, `${formato} completo=${completo}: ${sentinel}`).not.toContain(sentinel);
+      }
     }
   });
 
@@ -178,12 +258,51 @@ describe("ecosystem_diagnostico output", () => {
     expect(text.text.startsWith("Diagnóstico do AI Ecosystem 1.3.0:")).toBe(true);
     expect(() => JSON.parse(text.text)).toThrow();
 
-    const json = await tool.handler({ formato: "json" }, ctx);
+    const json = await tool.handler({ formato: "json", completo: true }, ctx);
     const parsed = JSON.parse((json.content[0] as { text: string }).text) as { versao: string; resumo: Record<string, number>; achados: Array<{ id: string; severidade: string }> };
     expect(parsed.versao).toBe("1.3.0");
     expect(parsed.achados.length).toBeGreaterThan(8);
     expect(parsed.resumo.ok + parsed.resumo.aviso + parsed.resumo.erro).toBe(parsed.achados.length);
     expect(json.structuredContent).toMatchObject({ versao: "1.3.0" });
+  });
+
+  it("with formato json and no completo, lists only warnings and errors, and keeps the counts", async () => {
+    const tool = createDiagnosticTool(deps());
+    const json = await tool.handler({ formato: "json" }, ctx);
+    const parsed = JSON.parse((json.content[0] as { text: string }).text) as { resumo: Record<string, number>; achados: Array<{ severidade: string }> };
+    expect(parsed.achados.length).toBeGreaterThan(0);
+    expect(parsed.achados.every((f) => f.severidade !== "ok")).toBe(true);
+    expect(parsed.resumo.ok).toBeGreaterThan(5);
+    expect(json.structuredContent).toMatchObject({ resumo: parsed.resumo });
+    expect((json.structuredContent as { achados: unknown[] }).achados).toEqual(parsed.achados);
+  });
+
+  it("without completo the text has only [aviso] and [erro] lines and the ok count in the header", async () => {
+    const tool = createDiagnosticTool(deps());
+    const text = ((await tool.handler({}, ctx)).content[0] as { text: string }).text;
+    const [header, ...lines] = text.split("\n");
+    const okCount = await buildDiagnostic(deps());
+    expect(header).toContain(`${okCount.resumo.ok} ok, ${okCount.resumo.aviso} avisos, ${okCount.resumo.erro} erros.`);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((l) => l.startsWith("[aviso] ") || l.startsWith("[erro] "))).toBe(true);
+    expect(text).not.toContain("[ok]");
+  });
+
+  it("with completo true the [ok] lines appear too", async () => {
+    const tool = createDiagnosticTool(deps());
+    const text = ((await tool.handler({ completo: true }, ctx)).content[0] as { text: string }).text;
+    expect(text).toContain("[ok] AI Ecosystem 1.0.0: registrado, 2 tools.");
+    expect(text).toContain("[aviso] ");
+  });
+
+  it("says nothing is wrong when there are no warnings or errors, and keeps the ok count", async () => {
+    const allOn = hooksStatus().modules.map((m) => (m.id === "ai-git-tools" ? { ...m, mode: "bloquear" as const } : m));
+    const tool = createDiagnosticTool(deps({ getHooksStatus: () => hooksStatus({ modules: allOn }) }));
+    const text = ((await tool.handler({}, ctx)).content[0] as { text: string }).text;
+    const lines = text.split("\n");
+    expect(lines[0]).toMatch(/: \d+ ok, 0 avisos, 0 erros\.$/);
+    expect(lines[1]).toBe("Nenhum aviso ou erro. Use completo: true para listar os itens ok.");
+    expect(lines).toHaveLength(2);
   });
 
   it("formats one line per finding with the action after an arrow", async () => {

@@ -8,7 +8,7 @@ import type { CatalogSetupHost } from "../../src/catalog/install-flow";
 import type { InstallResult } from "../../src/catalog/installer-service";
 import type { HookInstallPlan } from "../../src/hooks/hook-manager";
 import type { CatalogEntry } from "../../src/types";
-import { enableModule, hasHook, hookCommands, readVaultFile, settingsFile, skillText, startRig, stateFile, stopRigs } from "./helpers";
+import { enableModule, hasHook, hasProtection, hookCommands, readVaultFile, settingsFile, skillText, startRig, stateFile, stopRigs } from "./helpers";
 import type { SetupRig } from "./helpers";
 
 afterEach(stopRigs);
@@ -61,8 +61,9 @@ describe("catalog install with confirmation", () => {
     expect(shown?.catalog?.setupEntries.map((e) => e.event)).toEqual(["SessionStart", "UserPromptSubmit"]);
     expect(shown?.catalog?.setupEntries[0]?.command).toContain("ai-ecosystem-hook.mjs\" ai-scripts setup");
     expect(shown?.catalog?.geminiPath).toBe("GEMINI.md");
-    expect(shown?.entries.map((e) => `${e.event} ${e.matcher}`)).toEqual(["PreToolUse Bash|PowerShell"]);
-    expect(shown?.entries[0]?.command).toContain("ai-scripts protecao");
+    // The plan shows the single dispatch entry of the core, which covers the module once it is configured.
+    expect(shown?.entries.map((e) => `${e.event} ${e.matcher}`)).toEqual(["PreToolUse Grep|Glob|Bash|PowerShell|Write"]);
+    expect(shown?.entries[0]?.command).toMatch(/ai-ecosystem-hook\.mjs" ai-ecosystem despacho$/);
     expect(shown?.settingsPath.replace(/\\/g, "/")).toMatch(/\.claude\/settings\.local\.json$/);
     expect(shown?.node.available).toBe(true);
 
@@ -122,7 +123,7 @@ describe("catalog install with confirmation", () => {
     const prompts = (settingsFile(r).hooks.UserPromptSubmit as Array<Record<string, any>>).filter((g) => g.hooks[0].command.includes("ai-scripts setup"));
     expect(prompts).toHaveLength(1);
     expect(prompts[0]?.matcher).toBeUndefined();
-    expect(hasHook(r, "ai-scripts", "protecao")).toBe(false);
+    expect(hasProtection(r, "ai-scripts")).toBe(false);
 
     const gemini = readVaultFile(r, "GEMINI.md") ?? "";
     expect(gemini).toContain("<!-- ai-ecosystem:start -->");

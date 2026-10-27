@@ -11,6 +11,7 @@ import {
   configureCore,
   enableModule,
   hasHook,
+  hasProtection,
   hookCommands,
   readVaultFile,
   registerHandler,
@@ -172,7 +173,7 @@ describe("a module installed from the catalog", () => {
 
     expect(done.data).toMatchObject({ ok: true, estado: "configurado", hook_temporario_removido: true, hooks_protecao: "instalados", gemini_md: "sem_alteracao" });
     expect(hasHook(r, "ai-scripts", "setup")).toBe(false);
-    expect(hasHook(r, "ai-scripts", "protecao")).toBe(true);
+    expect(hasProtection(r, "ai-scripts")).toBe(true);
     expect(stateFile(r, "modules/ai-scripts.json").estado).toBe("configurado");
     expect(stateFile(r, "modules/ai-scripts.configurado.json")).toBeDefined();
     expect(await toolNames(r, claude)).toContain("ai_scripts_ok");
@@ -189,7 +190,7 @@ describe("a module installed from the catalog", () => {
     // The core round wrote the mode of every module with a protection hook.
     expect(stateFile(r, "config.json").modos).toMatchObject({ "ai-templates": "avisar", "ai-scripts": "avisar" });
     await setupComplete(r, "ai-templates");
-    expect(hasHook(r, "ai-templates", "protecao")).toBe(true);
+    expect(hasProtection(r, "ai-templates")).toBe(true);
   });
 
   it("Telegram needs Environment Keys configured, and its own handler to agree", async () => {
@@ -221,7 +222,7 @@ describe("a module installed from the catalog", () => {
     expect(refused.isError).toBe(true);
     expect(refused.data.faltando).toEqual(["pick the folders"]);
     expect(hasHook(r, "ai-vault-search", "setup")).toBe(true);
-    expect(hasHook(r, "ai-vault-search", "protecao")).toBe(false);
+    expect(hasProtection(r, "ai-vault-search")).toBe(false);
     expect(stateFile(r, "modules/ai-vault-search.configurado.json")).toBeUndefined();
     expect(await toolNames(r, await claudeSession(r))).not.toContain("ai_vault_search_ok");
   });
@@ -256,7 +257,7 @@ describe("turning a module off", () => {
     await installFromCatalog(r, "ai-scripts", "AI Scripts");
     await installFromCatalog(r, "ai-templates", "AI Templates");
     await setupComplete(r, "ai-scripts");
-    expect(hasHook(r, "ai-scripts", "protecao")).toBe(true);
+    expect(hasProtection(r, "ai-scripts")).toBe(true);
     expect(readVaultFile(r, "GEMINI.md")).toContain("run_ai_script");
 
     r.enabled.delete("ai-scripts");
@@ -327,13 +328,13 @@ describe("turning a module off", () => {
     r.eco.api.unregisterModule("ai-scripts");
     await sleep(120);
     await r.eco.setup!.whenIdle();
-    expect(hasHook(r, "ai-scripts", "protecao")).toBe(false);
+    expect(hasProtection(r, "ai-scripts")).toBe(false);
 
     enableModule(r, "ai-scripts", "AI Scripts");
     await sleep(50);
     await r.eco.setup!.whenIdle();
     expect(stateFile(r, "modules/ai-scripts.json").estado).toBe("configurado");
-    expect(hasHook(r, "ai-scripts", "protecao")).toBe(true);
+    expect(hasProtection(r, "ai-scripts")).toBe(true);
     expect(hasHook(r, "ai-scripts", "setup")).toBe(false);
     expect(runSetupHook(r, "ai-scripts")).toBe("");
   });

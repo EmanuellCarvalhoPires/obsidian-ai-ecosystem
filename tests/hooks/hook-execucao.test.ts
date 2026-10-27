@@ -1,10 +1,7 @@
-// The tools_run approval of the core (type execucao) and the ready calls of the protection hooks.
+// The retired execucao type (old settings entries stay harmless) and the ready calls of the protection hooks.
 import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CORE_RUN_SPEC, CORE_SPECS, buildCommand, parseCommand } from "../../src/hooks/hook-specs";
-import { ToolIndexWriter } from "../../src/tool-index/tool-index-writer";
-import type { ToolIndexEntry } from "../../src/types";
+import { CORE_SPECS, buildCommand, parseCommand } from "../../src/hooks/hook-specs";
 import { HookWorld, runWithOpenStdin } from "./helpers";
 
 let world: HookWorld;
@@ -15,101 +12,41 @@ afterEach(() => world.cleanup());
 
 const RUN = "mcp__ai-ecosystem__tools_run";
 
-function index(moduleId: string, entries: ToolIndexEntry[]): void {
-  new ToolIndexWriter(world.abs(".obsidian", "plugins", moduleId, "tools.db")).sync(moduleId, entries);
-}
-
-function run(toolInput: Record<string, unknown>) {
-  return world.run("ai-ecosystem", "execucao", { hook_event_name: "PreToolUse", tool_name: RUN, tool_input: toolInput });
-}
-
 describe("hook specs: execucao", () => {
-  it("is a core entry on PreToolUse of tools_run and its command parses back", () => {
-    expect(CORE_RUN_SPEC).toEqual({ module: "ai-ecosystem", type: "execucao", event: "PreToolUse", matcher: "mcp__.*__tools_run" });
-    expect(CORE_SPECS.map((s) => s.type)).toEqual(["falha", "execucao"]);
+  it("is no longer installed, and its command still parses back so older entries can be removed", () => {
+    expect(CORE_SPECS.map((s) => s.type)).toEqual(["falha", "resumo"]);
     expect(parseCommand(buildCommand("/v", "ai-ecosystem", "execucao"))).toEqual({ module: "ai-ecosystem", type: "execucao" });
   });
 });
 
-describe("hook script: execucao (tools_run)", () => {
-  beforeEach(() => {
-    index("ai-git-tools", [
-      { name: "git_status", description: "Status", efeito: "leitura" },
-      { name: "git_push", description: "Push", efeito: "externo", aprovacao: "Posso fazer o push da branch {branch} para {remoto}?" },
-      { name: "git_commit", description: "Commit", efeito: "externo" },
-      { name: "git_pr_merge", description: "Merge", efeito: "leitura" },
-    ]);
-    index("ai-templates", [
-      { name: "create_note_from_template", description: "Cria", efeito: "cofre" },
-      { name: "apaga_molde", description: "Apaga", efeito: "cofre", aprovacao: "obrigatoria" },
-    ]);
-    index("telegram-ai-gateway", [{ name: "telegram_send_message", description: "Envia", efeito: "externo", aprovacao: "dispensada" }]);
+describe("hook script: execucao (retired)", () => {
+  function expectSilent(out: ReturnType<HookWorld["run"]>, label = ""): void {
+    expect(out.status, label).toBe(0);
+    expect(out.stdout, label).toBe("");
+    expect(out.decision, label).toBeFalsy();
+  }
+
+  it("exits 0 with no output for a tools_run call", () => {
+    const out = world.run("ai-ecosystem", "execucao", { hook_event_name: "PreToolUse", tool_name: RUN, tool_input: { id: "git_commit" } });
+    expectSilent(out);
   });
 
-  it("asks for a tool with efeito externo, with the generic question", () => {
-    const out = run({ id: "git_commit", args: { mensagem: "x" } });
-    expect(out.status).toBe(0);
-    expect(out.decision).toBe("ask");
-    expect(out.reason).toBe("Posso executar git_commit (módulo ai-git-tools, efeito externo)?");
-  });
-
-  it("fills the question template of aprovacao with the arguments, and falls back when one is missing", () => {
-    expect(run({ id: "git_push", args: { branch: "feature/x", remoto: "origin" } }).reason).toBe("Posso fazer o push da branch feature/x para origin?");
-    expect(run({ id: "git_push", args: JSON.stringify({ branch: "feature/x", remoto: "origin" }) }).reason).toBe("Posso fazer o push da branch feature/x para origin?");
-    expect(run({ id: "git_push", args: { branch: "feature/x" } }).reason).toBe("Posso executar git_push (módulo ai-git-tools, efeito externo)?");
-    expect(run({ id: "git_push", args: { branch: "a\nb", remoto: "origin" } }).decision).toBe("ask");
-  });
-
-  it("makes no decision for leitura and cofre, nor for an approval waived on purpose", () => {
-    for (const id of ["git_status", "create_note_from_template", "telegram_send_message"]) {
-      const out = run({ id, args: {} });
-      expect(out.status, id).toBe(0);
-      expect(out.stdout, id).toBe("");
-    }
-  });
-
-  it("asks when aprovacao is obrigatoria, whatever the effect", () => {
-    expect(run({ id: "apaga_molde" }).decision).toBe("ask");
-  });
-
-  it("treats git_pr_merge like any other tool: it follows the index row (no special merge question)", () => {
-    for (const input of [{ id: "git_pr_merge", args: { numero: 9, destino: "develop" } }, { id: "git_pr_merge" }]) {
-      const out = run(input);
-      expect(out.status).toBe(0);
-      expect(out.stdout).toBe("");
-    }
-  });
-
-  it("asks for an unknown id, an invalid id, bad input and without any index", () => {
-    expect(run({ id: "nao_existe" }).reason).toContain("Posso executar nao_existe pelo tools_run?");
-    expect(run({ id: "rm -rf /" }).reason).toBe("Posso executar esta tool pelo tools_run?");
-    expect(run({}).decision).toBe("ask");
-    fs.rmSync(world.abs(".obsidian"), { recursive: true, force: true });
-    expect(run({ id: "git_status" }).decision).toBe("ask");
-  });
-
-  it("asks when the input is not JSON or never ends", async () => {
+  it("exits 0 with no output when the input is not JSON", () => {
     const result = spawnSync(process.execPath, [world.script, "ai-ecosystem", "execucao"], { input: "not json", encoding: "utf8", timeout: 15000 });
-    expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
+  it("exits 0 with no output while stdin stays open", async () => {
     const open = await runWithOpenStdin(world, "ai-ecosystem", "execucao");
     expect(open.code).toBe(0);
-    expect(JSON.parse(open.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(open.stdout).toBe("");
   });
 
-  it("asks even with the hooks turned off and without the heartbeat", () => {
+  it("exits 0 with no output with the hooks turned off and without the heartbeat", () => {
     world.heartbeat(null);
     const out = world.run("ai-ecosystem", "execucao", { tool_name: RUN, tool_input: { id: "git_commit" } }, { AI_ECOSYSTEM_HOOKS: "off" });
-    expect(out.decision).toBe("ask");
-  });
-
-  it("reads the module of tools.json first and follows configDir", () => {
-    world.config({ configDir: "cfg" });
-    new ToolIndexWriter(world.abs("cfg", "plugins", "mod-a", "tools.db")).sync("mod-a", [{ name: "dup", description: "a", efeito: "leitura" }]);
-    new ToolIndexWriter(world.abs("cfg", "plugins", "mod-b", "tools.db")).sync("mod-b", [{ name: "dup", description: "b", efeito: "externo" }]);
-    world.json("tools.json", { dup: "mod-b" });
-    expect(run({ id: "dup" }).reason).toBe("Posso executar dup (módulo mod-b, efeito externo)?");
-    world.json("tools.json", { dup: "mod-a" });
-    expect(run({ id: "dup" }).stdout).toBe("");
+    expectSilent(out);
   });
 });
 
@@ -118,6 +55,38 @@ describe("hook script: falha through tools_run", () => {
     world.json("tools.json", { tools_run: "ai-ecosystem", git_push: "ai-git-tools" });
     world.run("ai-ecosystem", "falha", { tool_name: RUN, tool_input: { id: "git_push", args: {} } });
     expect(Object.keys(world.readJson<Record<string, number>>("falhas.json") ?? {})).toEqual(["ai-git-tools"]);
+  });
+
+  it("does not mark the module for an argument error answered by tools_run", () => {
+    world.json("tools.json", { tools_run: "ai-ecosystem", git_push: "ai-git-tools" });
+    const out = world.run("ai-ecosystem", "falha", { tool_name: RUN, tool_input: { id: "git_push" }, error: "Invalid arguments: id is required." });
+    expect(out.status).toBe(0);
+    expect(out.stdout).toBe("");
+    expect(world.readJson("falhas.json")).toBeUndefined();
+  });
+
+  it("does not mark the module for an unknown id answered by tools_run", () => {
+    world.json("tools.json", { tools_run: "ai-ecosystem", git_push: "ai-git-tools" });
+    world.run("ai-ecosystem", "falha", { tool_name: RUN, tool_input: { id: "git_push" }, error: "Unknown tool: x. Find the right id with tools_find." });
+    expect(world.readJson("falhas.json")).toBeUndefined();
+  });
+
+  it("does not mark any module for a batch of calls", () => {
+    world.json("tools.json", { tools_run: "ai-ecosystem", git_push: "ai-git-tools" });
+    world.run("ai-ecosystem", "falha", { tool_name: RUN, tool_input: { calls: [{ id: "git_push" }] }, error: "Error: boom" });
+    expect(world.readJson("falhas.json")).toBeUndefined();
+  });
+
+  it("still marks the module for an ordinary error inside tools_run", () => {
+    world.json("tools.json", { tools_run: "ai-ecosystem", git_push: "ai-git-tools" });
+    world.run("ai-ecosystem", "falha", { tool_name: RUN, tool_input: { id: "git_push" }, error: "Error: boom" });
+    expect(Object.keys(world.readJson<Record<string, number>>("falhas.json") ?? {})).toEqual(["ai-git-tools"]);
+  });
+
+  it("does not mark the module of a direct tool that answered with an argument error", () => {
+    world.json("tools.json", { git_push: "ai-git-tools" });
+    world.run("ai-git-tools", "falha", { tool_name: "mcp__ai-ecosystem__git_push", tool_input: {}, error: "Invalid arguments: x" });
+    expect(world.readJson("falhas.json")).toBeUndefined();
   });
 });
 

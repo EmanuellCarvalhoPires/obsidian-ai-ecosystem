@@ -1,5 +1,5 @@
-// The screen service: keeps the saved screens, runs the preview + approval of tela_criar /
-// tela_editar / tela_remover and runs a saved screen when the agent calls its tool.
+// The screen service: keeps the saved screens, runs the preview + approval of tela_gerenciar /
+// tela_remover and runs a saved screen when the agent calls its tool.
 // Pure Node: the windows come from the ScreenHost the Obsidian side provides.
 import * as nodeTimers from "node:timers";
 import { ECOSYSTEM_ID } from "../types";
@@ -142,7 +142,7 @@ export class ScreenService {
     return json({ limite: this.deps.getLimit(), total: telas.length, telas });
   }
 
-  // ---- tela_criar / tela_editar / tela_remover ---------------------------------
+  // ---- tela_gerenciar / tela_remover -------------------------------------------
 
   async create(args: Record<string, unknown>, ctx: HubCallContext): Promise<HubToolResult> {
     const unknown = rejectUnknown(args, ["definicao"]);
@@ -151,7 +151,7 @@ export class ScreenService {
     if (!parsed.ok) return failure("The screen definition is not valid:", parsed.errors);
     const definition = parsed.definition;
     if (this.screens.has(definition.slug)) {
-      return failure(`A screen with the slug "${definition.slug}" already exists. Use tela_editar to change it or choose another slug.`);
+      return failure(`A screen with the slug "${definition.slug}" already exists. Use tela_gerenciar with acao editar to change it or choose another slug.`);
     }
     const full = this.limitReached();
     if (full) return failure(full);

@@ -1,5 +1,5 @@
-// MCP tools of the screens: the four infrastructure tools (tela_criar, tela_listar, tela_editar,
-// tela_remover) and one tool per saved screen (tela_<slug>). Pure Node.
+// MCP tools of the screens: the three infrastructure tools (tela_gerenciar, tela_listar, tela_remover)
+// and one tool per saved screen (tela_<slug>). Pure Node.
 import type { HubTool } from "../types";
 import { COLUMN_TYPES, FIELD_ID_PATTERN, FIELD_TYPES, SLUG_PATTERN, screenToolName } from "./model";
 import type { ScreenDefinition, ScreenField } from "./model";
@@ -128,15 +128,30 @@ export function createScreenTool(definition: ScreenDefinition, service: ScreenSe
 export function createScreenInfraTools(service: ScreenService): HubTool[] {
   return [
     {
-      name: "tela_criar",
-      title: "Create a screen",
+      name: "tela_gerenciar",
+      title: "Create or edit a screen",
       description:
-        "Creates a screen (a form the user fills in inside Obsidian) as a new tool tela_<slug>. " +
+        "Creates (acao criar) or replaces (acao editar) a screen, a form the user fills in inside Obsidian, as the tool tela_<slug>. " +
         "The user sees a preview of the screen and its JSON definition and must approve it; nothing is saved before that. " +
-        `${FIELD_GUIDE} Returns { status: "aprovado" | "recusado" | "expirado" | "cancelado" }; waits up to 5 minutes.`,
-      inputSchema: { type: "object", properties: { definicao: DEFINITION_SCHEMA }, required: ["definicao"], additionalProperties: false },
-      annotations: { title: "Create a screen", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      handler: (args, ctx) => service.create(args, ctx),
+        'Call it with acao guia first to get the list of field types. Returns { status: "aprovado" | "recusado" | "expirado" | "cancelado" }; waits up to 5 minutes.',
+      inputSchema: {
+        type: "object",
+        properties: {
+          acao: { type: "string", enum: ["criar", "editar", "guia"] },
+          slug: { type: "string", pattern: SLUG_PATTERN.source, description: "Only for editar: slug of the screen to replace (it cannot change)." },
+          definicao: DEFINITION_SCHEMA,
+        },
+        required: ["acao"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Create or edit a screen", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      handler: (args, ctx) => {
+        const { acao, ...rest } = args;
+        if (acao === "guia") return Promise.resolve({ content: [{ type: "text", text: FIELD_GUIDE }] });
+        if (acao === "criar") return service.create(rest, ctx);
+        if (acao === "editar") return service.edit(rest, ctx);
+        return Promise.resolve({ content: [{ type: "text", text: "Invalid arguments: acao must be criar, editar or guia." }], isError: true });
+      },
     },
     {
       name: "tela_listar",
@@ -145,21 +160,6 @@ export function createScreenInfraTools(service: ScreenService): HubTool[] {
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: { title: "List screens", readOnlyHint: true, openWorldHint: false },
       handler: () => Promise.resolve(service.listTool()),
-    },
-    {
-      name: "tela_editar",
-      title: "Edit a screen",
-      description:
-        "Replaces the definition of a saved screen (the slug cannot change). The user sees a preview and must approve it. " +
-        `${FIELD_GUIDE} Returns { status: "aprovado" | "recusado" | "expirado" | "cancelado" }; waits up to 5 minutes.`,
-      inputSchema: {
-        type: "object",
-        properties: { slug: { type: "string", pattern: SLUG_PATTERN.source }, definicao: DEFINITION_SCHEMA },
-        required: ["slug", "definicao"],
-        additionalProperties: false,
-      },
-      annotations: { title: "Edit a screen", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      handler: (args, ctx) => service.edit(args, ctx),
     },
     {
       name: "tela_remover",

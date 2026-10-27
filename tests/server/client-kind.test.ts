@@ -23,7 +23,7 @@ describe("detectClientKind", () => {
 });
 
 const seen: Array<{ tool: string; kind: ClientKind | undefined; hasSignal: boolean }> = [];
-const results: Array<{ moduleId: string; isError: boolean }> = [];
+const results: Array<{ moduleId: string; failed: boolean }> = [];
 
 function record(name: string, extra: Partial<HubTool> = {}): HubTool {
   return {
@@ -72,8 +72,8 @@ async function setup(opts: { failing?: boolean } = {}) {
     {
       isToolHidden: (registered, kind) =>
         kind === "claude-code" && registered.moduleId === "pending-mod" && !registered.tool.availableDuringSetup,
-      onToolResult: (moduleId, isError) => {
-        results.push({ moduleId, isError });
+      onToolResult: (moduleId, failed) => {
+        results.push({ moduleId, failed });
         if (opts.failing) throw new Error("marker store is broken");
       },
     },
@@ -169,10 +169,29 @@ describe("tool result callback", () => {
     const thrown = await call(headers, "pending_throws", 5);
     expect(thrown.result.isError).toBe(true);
     expect(results).toEqual([
-      { moduleId: "ready-mod", isError: false },
-      { moduleId: "pending-mod", isError: true },
-      { moduleId: "pending-mod", isError: true },
+      { moduleId: "ready-mod", failed: false },
+      { moduleId: "pending-mod", failed: false },
+      { moduleId: "pending-mod", failed: true },
     ]);
+  });
+
+  it("does not count a tool answer with isError as a failure of the module, but a thrown error is one", async () => {
+    await setup();
+    const headers = await initialize("mcp-inspector");
+    const answered = await call(headers, "pending_fails", 4);
+    expect(answered.result.isError).toBe(true);
+    expect(results).toEqual([{ moduleId: "pending-mod", failed: false }]);
+    await call(headers, "pending_throws", 5);
+    expect(results).toEqual([
+      { moduleId: "pending-mod", failed: false },
+      { moduleId: "pending-mod", failed: true },
+    ]);
+  });
+
+  it("reports success as not failed", async () => {
+    await setup();
+    await call(await initialize("mcp-inspector"), "ready_tool");
+    expect(results).toEqual([{ moduleId: "ready-mod", failed: false }]);
   });
 
   it("never breaks the request when the callback throws", async () => {

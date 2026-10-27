@@ -1,6 +1,8 @@
 // ecosystem_diagnostico: one compact, actionable health report of the suite. Read-only. It only
 // ever reports counts and yes/no answers: never a secret name or value, a token, a chat id or a
 // user path. Pure Node (no "obsidian" import).
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { HooksStatus } from "../hooks/hook-manager";
 import { ECOSYSTEM_ID, SCRIPTS_SERVICE, SECRETS_SERVICE, TEMPLATES_SERVICE } from "../types";
 import type { HubTool, HubToolResult, ModuleInfo, ScriptsListService, SecretVaultService, ServerStatus, TemplatesListService } from "../types";
@@ -29,6 +31,9 @@ export interface DiagnosticDeps {
   /** Undefined when the vault has no absolute folder (no hooks). */
   getHooksStatus?: () => HooksStatus;
   getService?: <T>(name: string) => T | undefined;
+  /** Absolute vault folder and Obsidian config folder name, used to compare the loaded modules with the files on disk. */
+  vaultBasePath?: string;
+  configDir?: string;
 }
 
 /** The suite, in the order of the report. */
@@ -68,6 +73,48 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+const STALE_ACTION = "Recarregue o plugin (desative e ative de novo em Plugins da comunidade) para carregar a versão que está em disco.";
+
+/**
+ * A registered module whose files on disk changed after it was loaded: another manifest version, or a
+ * main.js written after the registration. Read-only; a read error is no signal and gives no finding.
+ */
+function staleModuleFinding(deps: DiagnosticDeps, info: ModuleInfo, name: string): Finding | undefined {
+  if (!deps.vaultBasePath || !deps.configDir) return undefined;
+  const dir = path.join(deps.vaultBasePath, deps.configDir, "plugins", info.id);
+  let diskVersion: string | undefined;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")) as { version?: unknown };
+    if (typeof manifest.version === "string") diskVersion = manifest.version;
+  } catch {
+    // No readable manifest: no version signal.
+  }
+  if (diskVersion !== undefined && diskVersion !== info.version) {
+    return {
+      id: `defasado:${info.id}`,
+      area: "modulos",
+      severidade: "aviso",
+      mensagem: `${name}: carregado na versão ${info.version}, mas o manifest.json em disco é ${diskVersion}.`,
+      acao: STALE_ACTION,
+    };
+  }
+  try {
+    const mtimeMs = fs.statSync(path.join(dir, "main.js")).mtimeMs;
+    if (mtimeMs > info.registeredAt + 5000) {
+      return {
+        id: `defasado:${info.id}`,
+        area: "modulos",
+        severidade: "aviso",
+        mensagem: `${name}: o main.js em disco foi alterado depois de o módulo ser carregado.`,
+        acao: STALE_ACTION,
+      };
+    }
+  } catch {
+    // No main.js: no signal.
+  }
+  return undefined;
+}
+
 export async function buildDiagnostic(deps: DiagnosticDeps): Promise<DiagnosticReport> {
   const findings: Finding[] = [];
   const add = (f: Finding): void => {
@@ -93,6 +140,10 @@ export async function buildDiagnostic(deps: DiagnosticDeps): Promise<DiagnosticR
       });
     } else {
       add({ id: `modulo:${id}`, area: "modulos", severidade: "ok", mensagem: `${name} ${info.version}: registrado, ${plural(info.toolNames.length, "tool", "tools")}.` });
+    }
+    if (info) {
+      const stale = staleModuleFinding(deps, info, name);
+      if (stale) add(stale);
     }
   }
   const extra = modules.filter((m) => !SUITE_MODULES.some((s) => s.id === m.id)).length;
@@ -265,9 +316,19 @@ export async function buildDiagnostic(deps: DiagnosticDeps): Promise<DiagnosticR
   return { versao: deps.version, resumo, achados: findings };
 }
 
+/**
+ * The report as the tool returns it: the same counts, but only the warnings and errors in `achados`
+ * unless `completo` is true. buildDiagnostic keeps the full report.
+ */
+export function compactReport(report: DiagnosticReport, completo: boolean): DiagnosticReport {
+  if (completo) return report;
+  return { ...report, achados: report.achados.filter((f) => f.severidade !== "ok") };
+}
+
 export function formatDiagnosticText(report: DiagnosticReport): string {
   const { resumo } = report;
   const lines = [`Diagnóstico do AI Ecosystem ${report.versao}: ${resumo.ok} ok, ${resumo.aviso} avisos, ${resumo.erro} erros.`];
+  if (report.achados.length === 0 && resumo.ok > 0) lines.push("Nenhum aviso ou erro. Use completo: true para listar os itens ok.");
   for (const f of report.achados) {
     lines.push(`[${f.severidade}] ${f.mensagem}${f.acao ? ` -> ${f.acao}` : ""}`);
   }
@@ -281,15 +342,23 @@ export function createDiagnosticTool(deps: DiagnosticDeps): HubTool {
     description:
       "Health report of the AI Ecosystem suite: modules registered vs. expected (a missing one is just not installed), MCP server and port, " +
       "Claude Code hooks (installed and mode per module), pending setup, loaded templates and scripts, whether Telegram is configured and how many secrets exist. " +
-      "Each finding has a severity (ok, aviso, erro) and, when not ok, a next action. Read-only; never returns secret names or values.",
+      "Each finding has a severity (ok, aviso, erro) and, when not ok, a next action. " +
+      "Only warnings and errors are listed (completo: true lists everything). Read-only; never returns secret names or values.",
     inputSchema: {
       type: "object",
-      properties: { formato: { type: "string", enum: ["texto", "json"], description: 'Output format. Default "texto".' } },
+      properties: {
+        formato: { type: "string", enum: ["texto", "json"], description: 'Output format. Default "texto".' },
+        completo: {
+          type: "boolean",
+          default: false,
+          description: "Also list the items that are ok. Default: only warnings and errors, with the count of ok items.",
+        },
+      },
       additionalProperties: false,
     },
     annotations: { title: "AI Ecosystem diagnostic", readOnlyHint: true, openWorldHint: false },
     handler: async (args) => {
-      const report = await buildDiagnostic(deps);
+      const report = compactReport(await buildDiagnostic(deps), args.completo === true);
       const asJson = args.formato === "json";
       const result: HubToolResult = {
         content: [{ type: "text", text: asJson ? JSON.stringify(report, null, 2) : formatDiagnosticText(report) }],

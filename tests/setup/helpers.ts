@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Ecosystem } from "../../src/core/ecosystem";
+import { protectionSpec } from "../../src/hooks/hook-specs";
 import { NodeChecker } from "../../src/hooks/node-check";
 import type { Lang } from "../../src/i18n";
 import { createClient } from "../../src/server/auth";
@@ -133,7 +134,8 @@ export async function callTool(r: SetupRig, name: string, args: Record<string, u
   return { isError: result?.isError === true, data, text };
 }
 
-export const setupStatus = async (r: SetupRig, modulo: string) => (await callTool(r, "ecosystem_setup_status", { modulo })).data;
+export const setupStatus = async (r: SetupRig, modulo: string, completo = false) =>
+  (await callTool(r, "ecosystem_setup_status", completo ? { modulo, completo: true } : { modulo })).data;
 export const setupSave = (r: SetupRig, modulo: string, chave: string, valor: unknown) => callTool(r, "ecosystem_setup_save", { modulo, chave, valor });
 export const setupComplete = (r: SetupRig, modulo: string) => callTool(r, "ecosystem_setup_complete", { modulo });
 
@@ -217,6 +219,19 @@ export function hookCommands(r: SetupRig, file = "settings.local.json"): string[
 
 export function hasHook(r: SetupRig, module: string, type: string, file = "settings.local.json"): boolean {
   return hookCommands(r, file).some((c) => c.includes(`ai-ecosystem-hook.mjs" ${module} ${type}`));
+}
+
+/**
+ * Whether a module has its protection hook. Either its own "protecao" entry (older versions), or the
+ * single dispatch entry of the core, which covers a module that has a protection, is configured and
+ * keeps its hooks.
+ */
+export function hasProtection(r: SetupRig, module: string, file = "settings.local.json"): boolean {
+  if (hasHook(r, module, "protecao", file)) return true;
+  if (protectionSpec(module) === undefined) return false;
+  const state = stateFile(r, `modules/${module}.json`);
+  const covered = state?.estado === "configurado" && state?.hooksRemovidos !== true;
+  return covered && hasHook(r, "ai-ecosystem", "despacho", file);
 }
 
 /** Runs the real hook script of the vault, like Claude Code does at the start of a session. */

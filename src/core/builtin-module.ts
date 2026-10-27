@@ -24,8 +24,7 @@ export const INDEXED_MCP_INSTRUCTIONS =
   "Each line is `id(required*, optional?) | summary | effect`, and the signature usually tells you the arguments already. " +
   'Run a tool with tools_run {"id": "<id>", "args": {...}}; its answer comes back unchanged. ' +
   "Call tools_describe (id, or ids for several at once) only when the signature is not enough. " +
-  "Once you have a tool's schema in this session, call tools_run directly without describing it again. " +
-  "Tools with effect externo ask the user before they run.";
+  "Once you have a tool's schema in this session, call tools_run directly without describing it again.";
 
 /**
  * Index metadata of the core's own tools (tools.db of the AI Ecosystem). The screen tools
@@ -35,7 +34,7 @@ export const CORE_TOOL_METADATA: Record<string, Pick<HubTool, "categoria" | "tag
   ecosystem_status: {
     categoria: "ecosystem",
     tags: ["status", "modulos", "servicos", "diagnostico", "versao", "modules"],
-    resumo: "Versão, servidor, módulos registrados (com as tools) e serviços do AI Ecosystem",
+    resumo: "Versão, servidor, módulos (detalhe:true lista as tools) e serviços do AI Ecosystem",
     efeito: "leitura",
   },
   ecosystem_diagnostico: {
@@ -76,10 +75,10 @@ export const CORE_TOOL_METADATA: Record<string, Pick<HubTool, "categoria" | "tag
     resumo: "Conclui a configuração de um módulo (marcador, hooks de proteção, tools liberadas)",
     efeito: "cofre",
   },
-  tela_criar: {
+  tela_gerenciar: {
     categoria: "telas",
-    tags: ["tela", "formulario", "criar", "screen", "form"],
-    resumo: "Cria uma tela (formulário) no Obsidian; salva só depois da aprovação do usuário",
+    tags: ["tela", "formulario", "criar", "editar", "screen", "form"],
+    resumo: "Cria ou edita uma tela (formulário); acao guia lista os tipos de campo",
     efeito: "cofre",
   },
   tela_listar: {
@@ -87,12 +86,6 @@ export const CORE_TOOL_METADATA: Record<string, Pick<HubTool, "categoria" | "tag
     tags: ["tela", "formulario", "listar", "screen"],
     resumo: "Lista as telas salvas e as tools tela_<slug> que elas criam",
     efeito: "leitura",
-  },
-  tela_editar: {
-    categoria: "telas",
-    tags: ["tela", "formulario", "editar", "screen"],
-    resumo: "Altera uma tela salva; grava só depois da aprovação do usuário",
-    efeito: "cofre",
   },
   tela_remover: {
     categoria: "telas",
@@ -131,8 +124,11 @@ export interface BuiltinModuleDeps {
   getHooksStatus?: () => HooksStatus;
   /** Looks up a Service Bus service (templates, scripts, secrets), for ecosystem_diagnostico. */
   getService?: <T>(name: string) => T | undefined;
+  /** Absolute vault folder and config folder name, for ecosystem_diagnostico (modules changed on disk). */
+  vaultBasePath?: string;
+  configDir?: string;
   scripts: ScriptToolsDeps;
-  /** The saved screens. Their tools (tela_criar... and tela_<slug>) are part of this module. */
+  /** The saved screens. Their tools (tela_gerenciar... and tela_<slug>) are part of this module. */
   screens?: ScreenService;
   /** The guided setup. Its tools (ecosystem_setup_*) are part of this module and never hidden. */
   setup?: SetupManager;
@@ -158,7 +154,7 @@ export function buildStatus(deps: BuiltinModuleDeps): EcosystemStatus {
   };
 }
 
-export function formatStatusText(status: EcosystemStatus): string {
+export function formatStatusText(status: EcosystemStatus, options: { names?: boolean } = {}): string {
   const { server } = status;
   const lines = [
     `AI Ecosystem ${status.version} (Provider API ${status.apiVersion}).`,
@@ -169,11 +165,53 @@ export function formatStatusText(status: EcosystemStatus): string {
   ];
   for (const m of status.modules) {
     lines.push(`- ${m.id} (${m.name} ${m.version}): ${m.toolNames.length} tools, ${m.promptNames.length} prompts, ${m.routeCount} routes`);
+    if (options.names) {
+      if (m.toolNames.length) lines.push(`  tools: ${m.toolNames.join(", ")}`);
+      if (m.promptNames.length) lines.push(`  prompts: ${m.promptNames.join(", ")}`);
+    }
     for (const warning of m.warnings) lines.push(`  warning: ${warning}`);
   }
   lines.push(status.services.length ? "Services:" : "Services: none");
   for (const s of status.services) lines.push(`- ${s.name} (provided by ${s.ownerModuleId})`);
   return lines.join("\n");
+}
+
+export interface StatusOptions {
+  detalhe?: boolean;
+  modulo?: string;
+}
+
+export function compactStatus(
+  status: EcosystemStatus,
+  options: StatusOptions,
+): { ok: true; text: string; structured: Record<string, unknown> } | { ok: false; error: string } {
+  const full = options.detalhe === true || options.modulo !== undefined;
+  let modules = status.modules;
+  if (options.modulo !== undefined) {
+    modules = status.modules.filter((m) => m.id === options.modulo);
+    if (modules.length === 0) {
+      const installed = status.modules.map((m) => m.id).join(", ");
+      return { ok: false, error: `Unknown module "${options.modulo}". Installed: ${installed}.` };
+    }
+  }
+  const text = formatStatusText({ ...status, modules }, { names: full });
+  const structured: Record<string, unknown> = {
+    version: status.version,
+    apiVersion: status.apiVersion,
+    server: status.server,
+    modules: modules.map((m) => ({
+      id: m.id,
+      name: m.name,
+      version: m.version,
+      tools: m.toolNames.length,
+      prompts: m.promptNames.length,
+      routes: m.routeCount,
+      ...(m.warnings.length ? { warnings: m.warnings } : {}),
+      ...(full ? { toolNames: m.toolNames, promptNames: m.promptNames } : {}),
+    })),
+    services: status.services.map((s) => ({ name: s.name, ownerModuleId: s.ownerModuleId })),
+  };
+  return { ok: true, text, structured };
 }
 
 /**
@@ -184,15 +222,25 @@ export function createBuiltinTools(deps: BuiltinModuleDeps): HubTool[] {
   const statusTool: HubTool = {
     name: "ecosystem_status",
     title: "AI Ecosystem status",
-    description: "Shows the AI Ecosystem version, the server status, the registered modules (with their tools) and the available services.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description:
+      "Shows the AI Ecosystem version, the server status, the registered modules and the available services. " +
+      "Argument detalhe:true lists the tool and prompt names of every module; argument modulo (a module id) shows only that module with its tool names.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        detalhe: { type: "boolean", default: false, description: "List the tool and prompt names of every module." },
+        modulo: { type: "string", description: "Only this module id, with its tool names." },
+      },
+      additionalProperties: false,
+    },
     annotations: { title: "AI Ecosystem status", readOnlyHint: true, openWorldHint: false },
-    handler: () => {
-      const status = buildStatus(deps);
-      return Promise.resolve({
-        content: [{ type: "text", text: formatStatusText(status) }],
-        structuredContent: { ...status },
+    handler: (args) => {
+      const result = compactStatus(buildStatus(deps), {
+        detalhe: args.detalhe === true,
+        modulo: typeof args.modulo === "string" && args.modulo !== "" ? args.modulo : undefined,
       });
+      if (!result.ok) return Promise.resolve({ content: [{ type: "text", text: result.error }], isError: true });
+      return Promise.resolve({ content: [{ type: "text", text: result.text }], structuredContent: result.structured });
     },
   };
   return [
