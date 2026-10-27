@@ -9,6 +9,8 @@ const MAX_SIGNATURE_PARAMS = 8;
 const MAX_DEFAULT_LENGTH = 20;
 const SLIM_DESCRIPTION = 300;
 const SLIM_PROPERTY_DESCRIPTION = 80;
+const MAX_BATCH_CALLS = 10;
+const BATCH_ITEM_CHARS = 1500;
 
 export interface DiscoveryToolsDeps {
   federation: ToolFederation;
@@ -17,8 +19,12 @@ export interface DiscoveryToolsDeps {
   getService: <T>(name: string) => T | undefined;
   /** Same rule as tools/list (e.g. a module still waiting for its setup is hidden from Claude Code). */
   isHidden?: (moduleId: string, tool: HubTool | undefined, kind: ClientKind | undefined) => boolean;
-  /** Told about the result of the tool tools_run ran, under the module that owns it. */
-  onToolResult?: (moduleId: string, isError: boolean) => void;
+  /**
+   * Told about the result of the tool tools_run ran, under the module that owns it. failed is true
+   * only when the handler threw or the module is not running the tool (a tool answer with isError is
+   * not a failure of the module).
+   */
+  onToolResult?: (moduleId: string, failed: boolean) => void;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -29,6 +35,20 @@ function text(value: string, isError = false): HubToolResult {
   const result: HubToolResult = { content: [{ type: "text", text: value }] };
   if (isError) result.isError = true;
   return result;
+}
+
+/** The id of a batch item, or undefined when the item is not an object with a non-empty id. */
+function batchItemId(item: unknown): string | undefined {
+  if (!isObject(item) || typeof item.id !== "string") return undefined;
+  const id = item.id.trim();
+  return id === "" ? undefined : id;
+}
+
+/** The answer of one batch item as plain text, cut to BATCH_ITEM_CHARS. */
+function summarize(result: HubToolResult): string {
+  const body = result.content.map((block) => (block.type === "text" ? block.text : "[image]")).join("\n");
+  if (body.length <= BATCH_ITEM_CHARS) return body;
+  return `${body.slice(0, BATCH_ITEM_CHARS)}\n[... ${body.length - BATCH_ITEM_CHARS} characters omitted; call the tool alone for the full answer ...]`;
 }
 
 function truncate(value: string, max: number): string {
@@ -223,6 +243,56 @@ export function createDiscoveryTools(deps: DiscoveryToolsDeps): HubTool[] {
     },
   };
 
+  /** One tool run the way a direct call runs it: same rules for tools_run, hidden modules and unknown ids. */
+  async function runOne(id: string, rawArgs: unknown, ctx: HubCallContext): Promise<HubToolResult> {
+    if (id === "tools_run") return text("tools_run cannot run itself. Give the id of the tool to run.", true);
+    let toolArgs: unknown = rawArgs;
+    if (typeof toolArgs === "string") {
+      try {
+        toolArgs = JSON.parse(toolArgs);
+      } catch {
+        return text("Invalid arguments: args must be an object.", true);
+      }
+    }
+    if (!isObject(toolArgs)) return text("Invalid arguments: args must be an object.", true);
+    const callArgs: Record<string, unknown> = toolArgs;
+
+    const registered = deps.findTool(id);
+    if (registered) {
+      if (hidden(registered.moduleId, registered.tool, ctx)) return text(hiddenText(registered.moduleId), true);
+      return report(registered.moduleId, () => registered.tool.handler(callArgs, { ...ctx, moduleId: registered.moduleId }));
+    }
+
+    const entry = deps.federation.get([id]).get(id);
+    if (!entry) return text(`Unknown tool: ${id}. Find the right id with tools_find.`, true);
+    if (hidden(entry.moduleId, undefined, ctx)) return text(hiddenText(entry.moduleId), true);
+    const runner = deps.getService<IndexedToolRunner>(toolRunnerServiceName(entry.moduleId));
+    if (!runner || typeof runner.run !== "function") {
+      try {
+        deps.onToolResult?.(entry.moduleId, true);
+      } catch {
+        /* the marker is only a hint */
+      }
+      return text(`The tool ${id} is in the index of the module "${entry.moduleId}", but that module is not running it now (inactive or outdated).`, true);
+    }
+    return report(entry.moduleId, () => runner.run(id, callArgs, { ...ctx, moduleId: entry.moduleId }));
+  }
+
+  /** Runs the items one after the other; an item that fails does not stop the next ones. */
+  async function runBatch(calls: unknown[], ctx: HubCallContext): Promise<HubToolResult> {
+    const sections: string[] = [];
+    let failures = 0;
+    for (let i = 0; i < calls.length; i++) {
+      const item = calls[i];
+      const id = batchItemId(item);
+      const itemArgs = isObject(item) ? item.args : undefined;
+      const result = id === undefined ? text("Invalid arguments: item needs an id.", true) : await runOne(id, itemArgs ?? {}, ctx);
+      if (result.isError === true) failures++;
+      sections.push(`[${i + 1}/${calls.length}] ${id ?? "(no id)"} -> ${result.isError ? "error" : "ok"}\n${summarize(result)}`);
+    }
+    return { content: [{ type: "text", text: sections.join("\n\n") }], ...(failures === calls.length ? { isError: true } : {}) };
+  }
+
   const run: HubTool = {
     name: "tools_run",
     title: "Run a tool",
@@ -230,67 +300,60 @@ export function createDiscoveryTools(deps: DiscoveryToolsDeps): HubTool[] {
       "PRIMARY way to act in this workspace: runs any tool of this vault by its id (from tools_find), with its arguments in args. " +
       "Use it instead of shell commands (git, curl, python scripts) whenever tools_find has a matching tool; " +
       "if a call fails, fix the arguments and call again before falling back to the terminal. " +
-      "The answer is the tool's own answer, unchanged. Tools with effect externo ask the user first.",
+      "The answer is the tool's own answer, unchanged. " +
+      "Pass calls to run several tools in one call.",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "Tool id, e.g. \"git_status\"." },
         args: { type: "object", description: "Arguments of the tool (see its signature in tools_find)." },
+        calls: {
+          type: "array",
+          maxItems: MAX_BATCH_CALLS,
+          description: "Several tools in one call, run one after the other (max 10), each answer summarized. Use instead of id and args.",
+          items: {
+            type: "object",
+            properties: { id: { type: "string" }, args: { type: "object" } },
+            required: ["id"],
+            additionalProperties: false,
+          },
+        },
       },
-      required: ["id"],
       additionalProperties: false,
     },
     annotations: { title: "Run a tool", readOnlyHint: false, openWorldHint: true },
     categoria: "descoberta",
     tags: ["executar", "run", "tools"],
-    resumo: "Executa uma tool pelo id, repassando os argumentos ao módulo dono",
+    resumo: "Executa uma tool pelo id (ou várias em calls), repassando os argumentos ao módulo dono",
     efeito: "externo",
     exposicao: "fixa",
     handler: async (args, ctx) => {
+      if (args.calls !== undefined) {
+        if (optionalString(args, "id") !== undefined) return text("Invalid arguments: give id or calls, not both.", true);
+        if (!Array.isArray(args.calls) || args.calls.length < 1 || args.calls.length > MAX_BATCH_CALLS) {
+          return text("Invalid arguments: calls must be a list of 1 to 10 items {id, args}.", true);
+        }
+        return runBatch(args.calls, ctx);
+      }
       const id = optionalString(args, "id");
       if (!id) return text("Invalid arguments: id is required.", true);
-      if (id === "tools_run") return text("tools_run cannot run itself. Give the id of the tool to run.", true);
-      let toolArgs: unknown = args.args ?? {};
-      if (typeof toolArgs === "string") {
-        try {
-          toolArgs = JSON.parse(toolArgs);
-        } catch {
-          return text("Invalid arguments: args must be an object.", true);
-        }
-      }
-      if (!isObject(toolArgs)) return text("Invalid arguments: args must be an object.", true);
-      const callArgs: Record<string, unknown> = toolArgs;
-
-      const registered = deps.findTool(id);
-      if (registered) {
-        if (hidden(registered.moduleId, registered.tool, ctx)) return text(hiddenText(registered.moduleId), true);
-        return report(registered.moduleId, () => registered.tool.handler(callArgs, { ...ctx, moduleId: registered.moduleId }));
-      }
-
-      const entry = deps.federation.get([id]).get(id);
-      if (!entry) return text(`Unknown tool: ${id}. Find the right id with tools_find.`, true);
-      if (hidden(entry.moduleId, undefined, ctx)) return text(hiddenText(entry.moduleId), true);
-      const runner = deps.getService<IndexedToolRunner>(toolRunnerServiceName(entry.moduleId));
-      if (!runner || typeof runner.run !== "function") {
-        return text(`The tool ${id} is in the index of the module "${entry.moduleId}", but that module is not running it now (inactive or outdated).`, true);
-      }
-      return report(entry.moduleId, () => runner.run(id, callArgs, { ...ctx, moduleId: entry.moduleId }));
+      return runOne(id, args.args ?? {}, ctx);
     },
   };
 
-  /** Runs the call; exceptions become an error result, like a direct tools/call. */
-  async function safe(call: () => Promise<HubToolResult>): Promise<HubToolResult> {
+  /** Runs the call; exceptions become an error result, like a direct tools/call. threw tells them apart. */
+  async function safe(call: () => Promise<HubToolResult>): Promise<{ result: HubToolResult; threw: boolean }> {
     try {
-      return await call();
+      return { result: await call(), threw: false };
     } catch (err) {
-      return text(`Error: ${err instanceof Error ? err.message : String(err)}`, true);
+      return { result: text(`Error: ${err instanceof Error ? err.message : String(err)}`, true), threw: true };
     }
   }
 
   async function report(moduleId: string, call: () => Promise<HubToolResult>): Promise<HubToolResult> {
-    const result = await safe(call);
+    const { result, threw } = await safe(call);
     try {
-      deps.onToolResult?.(moduleId, result.isError === true);
+      deps.onToolResult?.(moduleId, threw);
     } catch {
       // The failure marker must never break a call.
     }

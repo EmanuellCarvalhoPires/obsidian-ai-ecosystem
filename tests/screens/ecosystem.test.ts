@@ -84,7 +84,7 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 describe("screens in the AI Ecosystem", () => {
-  it("offers the four infrastructure tools from the core module", async () => {
+  it("offers the three infrastructure tools from the core module", async () => {
     const r = await start(newDir());
     expect(await toolNames(r)).toEqual([
       "ecosystem_status",
@@ -94,18 +94,75 @@ describe("screens in the AI Ecosystem", () => {
       "tools_find",
       "tools_describe",
       "tools_run",
-      "tela_criar",
+      "tela_gerenciar",
       "tela_listar",
-      "tela_editar",
       "tela_remover",
     ]);
     expect(r.eco.registry.listTools().every((t) => t.moduleId === "ai-ecosystem")).toBe(true);
   });
 
+  it("tela_gerenciar with acao guia returns the field guide and saves nothing", async () => {
+    const r = await start(newDir());
+    const guide = await callTool(r, "tela_gerenciar", { acao: "guia" });
+    expect(guide.result.isError).toBeUndefined();
+    const text = guide.result.content[0].text as string;
+    expect(text).toContain("texto_longo");
+    expect(text).toContain("destino_nome");
+    expect(r.host.screens).toHaveLength(0);
+    expect(r.eco.screens?.list()).toEqual([]);
+  });
+
+  it("tela_gerenciar answers an unknown acao with an error", async () => {
+    const r = await start(newDir());
+    const bad = await callTool(r, "tela_gerenciar", { acao: "xyz" });
+    expect(bad.result.isError).toBe(true);
+    expect(bad.result.content[0].text).toContain("acao must be criar, editar or guia.");
+    expect(r.host.screens).toHaveLength(0);
+  });
+
+  it("tela_gerenciar with acao criar and no definicao answers the service error", async () => {
+    const r = await start(newDir());
+    const missing = await callTool(r, "tela_gerenciar", { acao: "criar" });
+    expect(missing.result.isError).toBe(true);
+    expect(missing.result.content[0].text).toContain("The screen definition is not valid:");
+    expect(r.host.screens).toHaveLength(0);
+  });
+
+  it("tela_gerenciar with acao editar and an unknown slug answers the service error", async () => {
+    const r = await start(newDir());
+    const unknown = await callTool(r, "tela_gerenciar", { acao: "editar", slug: "nao_existe", definicao: sampleDefinition({ slug: "nao_existe" }) });
+    expect(unknown.result.isError).toBe(true);
+    expect(unknown.result.content[0].text).toContain('There is no screen with the slug "nao_existe"');
+    expect(r.host.screens).toHaveLength(0);
+  });
+
+  it("tela_gerenciar keeps the field guide out of its description", async () => {
+    const r = await start(newDir());
+    const list = await rpc(r, "tools/list");
+    const tool = (list.result.tools as Array<{ name: string; description: string }>).find((t) => t.name === "tela_gerenciar");
+    expect(tool).toBeDefined();
+    expect(tool!.description.length).toBeLessThan(900);
+    expect(tool!.description).not.toContain("texto_longo");
+  });
+
+  it("tela_gerenciar edits a saved screen after approval, as criar does", async () => {
+    const r = await start(newDir());
+    r.host.autoPreview = "aprovado";
+    await callTool(r, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition() });
+    const edited = await callTool(r, "tela_gerenciar", {
+      acao: "editar",
+      slug: "cadastro_cliente",
+      definicao: sampleDefinition({ titulo: "Cadastro revisado" }),
+    });
+    expect(edited.result.isError).toBeUndefined();
+    expect(edited.result.structuredContent).toMatchObject({ status: "aprovado" });
+    expect(r.eco.screens?.list().find((d) => d.slug === "cadastro_cliente")?.titulo).toBe("Cadastro revisado");
+  });
+
   it("creates a screen through MCP after approval and offers its tool at once", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "aprovado";
-    const created = await callTool(r, "tela_criar", { definicao: sampleDefinition() });
+    const created = await callTool(r, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition() });
     expect(created.result.structuredContent).toEqual({ status: "aprovado", slug: "cadastro_cliente", tool: "tela_cadastro_cliente" });
     expect(await toolNames(r)).toContain("tela_cadastro_cliente");
 
@@ -116,7 +173,7 @@ describe("screens in the AI Ecosystem", () => {
   it("does not offer the tool of a screen that was rejected", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "recusado";
-    const rejected = await callTool(r, "tela_criar", { definicao: sampleDefinition() });
+    const rejected = await callTool(r, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition() });
     expect(rejected.result.structuredContent.status).toBe("recusado");
     expect(await toolNames(r)).not.toContain("tela_cadastro_cliente");
   });
@@ -125,8 +182,8 @@ describe("screens in the AI Ecosystem", () => {
     const dir = newDir();
     const first = await start(dir);
     first.host.autoPreview = "aprovado";
-    await callTool(first, "tela_criar", { definicao: sampleDefinition({ slug: "a" }) });
-    await callTool(first, "tela_criar", { definicao: sampleDefinition({ slug: "b" }) });
+    await callTool(first, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition({ slug: "a" }) });
+    await callTool(first, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition({ slug: "b" }) });
     await first.eco.unload();
 
     const second = await start(dir);
@@ -139,7 +196,7 @@ describe("screens in the AI Ecosystem", () => {
   it("runs a saved screen through MCP and logs the call without any password", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "aprovado";
-    await callTool(r, "tela_criar", { definicao: passwordDefinition() });
+    await callTool(r, "tela_gerenciar", { acao: "criar", definicao: passwordDefinition() });
 
     const typed = "My-Very-Secret-Token-9731";
     r.host.autoFill = { values: { servico: "github", token: typed } };
@@ -160,7 +217,7 @@ describe("screens in the AI Ecosystem", () => {
   it("answers an error for valores_iniciais of a password field", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "aprovado";
-    await callTool(r, "tela_criar", { definicao: passwordDefinition() });
+    await callTool(r, "tela_gerenciar", { acao: "criar", definicao: passwordDefinition() });
     const answer = await callTool(r, "tela_token_api", { valores_iniciais: { token: "abc" } });
     expect(answer.result.isError).toBe(true);
     expect(answer.result.content[0].text).toContain("cannot be pre-filled");
@@ -170,7 +227,7 @@ describe("screens in the AI Ecosystem", () => {
   it("closes the window when the client gives up on the call", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "aprovado";
-    await callTool(r, "tela_criar", { definicao: sampleDefinition() });
+    await callTool(r, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition() });
 
     const controller = new AbortController();
     const pending = rpc(r, "tools/call", { name: "tela_cadastro_cliente", arguments: {} }, controller.signal).catch(() => undefined);
@@ -185,7 +242,7 @@ describe("screens in the AI Ecosystem", () => {
   it("closes the windows when the plugin unloads", async () => {
     const r = await start(newDir());
     r.host.autoPreview = "aprovado";
-    await callTool(r, "tela_criar", { definicao: sampleDefinition() });
+    await callTool(r, "tela_gerenciar", { acao: "criar", definicao: sampleDefinition() });
     void rpc(r, "tools/call", { name: "tela_cadastro_cliente", arguments: {} }).catch(() => undefined);
     await until(() => r.host.screens.length === 1);
     await r.eco.unload();

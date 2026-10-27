@@ -81,6 +81,75 @@ function settings(file = "settings.local.json"): any {
   }
 }
 
+/** The vault path as the settings write it (forward slashes). */
+function vaultSlash(): string {
+  return vault.replace(/\\/g, "/");
+}
+
+/** The command of a plugin entry for a module and a type, as the settings hold it. */
+function commandOf(module: string, type: string): string {
+  return `node "${vaultSlash()}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ${module} ${type}`;
+}
+
+/** The single dispatch command the core writes. */
+function dispatchCommand(): string {
+  return commandOf("ai-ecosystem", "despacho");
+}
+
+/** The commands of the PreToolUse groups of a settings file. */
+function preCommands(file?: string): string[] {
+  const groups: Array<{ hooks?: Array<{ command?: unknown }> }> = settings(file)?.hooks?.PreToolUse ?? [];
+  return groups.flatMap((group) => (group.hooks ?? []).map((hook) => String(hook.command)));
+}
+
+/** The dispatch commands of a settings file. */
+function dispatchCommands(file?: string): string[] {
+  return preCommands(file).filter((c) => c.endsWith(" ai-ecosystem despacho"));
+}
+
+/** Protection commands of the older format (one per module). */
+function legacyCommands(): string[] {
+  return preCommands().filter((c) => c.endsWith(" protecao"));
+}
+
+/** The entries of a module as the status shows them. */
+function installedOf(manager: HookManager, id: string) {
+  return manager.getStatus().modules.find((m) => m.id === id)?.installed ?? [];
+}
+
+/** Writes the setup state of a module, as the core writes it (the hook script reads the same file). */
+function writeState(id: string, estado: string, origem = "legado"): void {
+  const dir = path.join(vault, ".claude", "ai-ecosystem", "modules");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ estado, origem, atualizadoEm: "2026-10-21T00:00:00.000Z", respostas: {} }));
+}
+
+const mineHook = { type: "command", command: "echo mine" };
+
+/** The settings of a vault from an older version: a protection entry per module, a setup entry and a user's hook. */
+function oldSettings(): unknown {
+  return {
+    hooks: {
+      PreToolUse: [
+        { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: commandOf("ai-git-tools", "protecao"), timeout: 10 }] },
+        { matcher: "Bash|PowerShell", hooks: [{ type: "command", command: commandOf("ai-scripts", "protecao"), timeout: 10 }] },
+        { hooks: [mineHook] },
+      ],
+      SessionStart: [{ hooks: [{ type: "command", command: commandOf("ai-scripts", "setup"), timeout: 10 }] }],
+    },
+  };
+}
+
+/** An old vault: both modules configured and their settings in the old format. Returns the settings file. */
+async function oldVault(): Promise<string> {
+  (await started()).dispose(); // creates the folders of the vault
+  writeState("ai-git-tools", "configurado");
+  writeState("ai-scripts", "configurado");
+  const file = path.join(vault, ".claude", "settings.local.json");
+  fs.writeFileSync(file, JSON.stringify(oldSettings()));
+  return file;
+}
+
 beforeEach(() => {
   vault = makeVault();
   registry = new FakeRegistry();
@@ -90,6 +159,37 @@ beforeEach(() => {
 afterEach(() => {
   for (const m of managers) m.dispose();
   removeVault(vault);
+});
+
+describe("HookManager.isSetupPending", () => {
+  it("is false when no module waits for its setup", async () => {
+    const manager = await started();
+    expect(manager.isSetupPending()).toBe(false);
+  });
+
+  it("is true while a registered module waits for its setup (the core, on its first run)", async () => {
+    registry.add("ai-ecosystem");
+    const manager = await started();
+    expect(manager.isSetupPending()).toBe(true);
+  });
+
+  it("is true for a module installed from the catalog before it registers", async () => {
+    const manager = await started();
+    manager.states.reset("ai-templates", { origem: "catalogo", estado: "pendente_configuracao", nome: "AI Templates" });
+    expect(manager.isSetupPending()).toBe(true);
+  });
+
+  it("is false again once that module is configured or turned off, even though it never registered", async () => {
+    const manager = await started();
+    manager.states.reset("ai-templates", { origem: "catalogo", estado: "pendente_configuracao", nome: "AI Templates" });
+    manager.states.setEstado("ai-templates", "configurado");
+    expect(manager.isSetupPending()).toBe(false);
+
+    manager.states.setEstado("ai-templates", "pendente_configuracao");
+    expect(manager.isSetupPending()).toBe(true);
+    manager.states.setEstado("ai-templates", "desativado");
+    expect(manager.isSetupPending()).toBe(false);
+  });
 });
 
 describe("HookManager.start", () => {
@@ -141,6 +241,13 @@ describe("HookManager.start", () => {
     expect(status.lastError).toBeUndefined();
   });
 
+  it("installs the core summary entry (resumo) on SessionStart, next to the failure entry", async () => {
+    await started();
+    expect(settings().hooks.SessionStart).toContainEqual({
+      hooks: [{ type: "command", command: `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-ecosystem resumo`, timeout: 10 }],
+    });
+  });
+
   it("writes no hook entry without Node and says so in the status", async () => {
     const manager = await started({ nodeChecker: nodeMissing() });
     expect(settings()).toBeUndefined();
@@ -151,17 +258,27 @@ describe("HookManager.start", () => {
     expect((await manager.planInstall("ai-scripts")).node.available).toBe(false);
   });
 
-  it("follows a moved vault: entries already in the settings get the new path", async () => {
+  it("follows a moved vault: the entries get the new path, and the old per-module entry becomes the dispatch entry", async () => {
+    registry.add("ai-templates");
+    registry.add("ai-scripts");
     const claude = path.join(vault, ".claude");
     fs.mkdirSync(claude, { recursive: true });
+    const oldPath = "D:/Old/Cofre/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs";
     fs.writeFileSync(
       path.join(claude, "settings.local.json"),
-      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: 'node "D:/Old/Cofre/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-templates protecao' }] }] } }),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: "Grep|Glob|Bash|PowerShell|Write", hooks: [{ type: "command", command: `node "${oldPath}" ai-ecosystem despacho`, timeout: 10 }] },
+            { matcher: "Write", hooks: [{ type: "command", command: `node "${oldPath}" ai-templates protecao`, timeout: 10 }] },
+          ],
+        },
+      }),
     );
     await started();
-    expect(settings().hooks.PreToolUse[0].hooks[0].command).toBe(
-      `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-templates protecao`,
-    );
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
+    expect(JSON.stringify(settings())).not.toContain("D:/Old");
   });
 
   it("reports a settings file it cannot parse, without touching it", async () => {
@@ -212,9 +329,6 @@ describe("module setup states", () => {
     expect(again.service.getModuleState("ai-ecosystem")).toBe("configurado");
   });
 
-  const protectionModules = () => (settings()?.hooks?.PreToolUse ?? []).map((e: any) => e.hooks[0].command as string);
-  const hasProtection = (id: string) => protectionModules().some((c: string) => c.includes(` ${id} protecao`));
-
   it("makes the modules of the first run legacy: configured, with protection hooks installed on its own", async () => {
     registry.add("ai-scripts", [], "AI Scripts");
     const manager = await started();
@@ -224,8 +338,10 @@ describe("module setup states", () => {
 
     expect(state("modules/ai-scripts.json")).toMatchObject({ estado: "configurado", origem: "legado", nome: "AI Scripts" });
     expect(state("modules/ai-templates.json")).toMatchObject({ estado: "configurado", origem: "legado" });
-    expect(hasProtection("ai-scripts")).toBe(true);
-    expect(hasProtection("ai-templates")).toBe(true);
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
+    expect(installedOf(manager, "ai-scripts").map((e) => e.type)).toEqual(["protecao"]);
+    expect(installedOf(manager, "ai-templates").map((e) => e.type)).toEqual(["protecao"]);
     expect(state("config.json").modos).toEqual({});
   });
 
@@ -243,26 +359,29 @@ describe("module setup states", () => {
     expect(settings()).toBeUndefined();
 
     await started();
-    expect(hasProtection("ai-scripts")).toBe(true);
-    expect(hasProtection("ai-vault-search")).toBe(true);
-    expect(protectionModules().some((c: string) => c.includes("telegram-ai-gateway"))).toBe(false);
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
+    expect(preCommands().some((c) => c.includes("telegram-ai-gateway"))).toBe(false);
   });
 
   it("does not reinstall on its own after the user removed the hooks, and the button brings them back", async () => {
     registry.add("ai-scripts");
     const first = await started();
-    expect(hasProtection("ai-scripts")).toBe(true);
+    expect(dispatchCommands()).toHaveLength(1);
+    expect(installedOf(first, "ai-scripts").map((e) => e.type)).toEqual(["protecao"]);
 
     expect(first.removeByUser("ai-scripts")).toEqual({ ok: true, changed: true });
     expect(state("modules/ai-scripts.json").hooksRemovidos).toBe(true);
     first.dispose();
 
     const second = await started();
-    expect(hasProtection("ai-scripts")).toBe(false);
+    expect(dispatchCommands()).toEqual([]);
+    expect(installedOf(second, "ai-scripts")).toEqual([]);
     expect(state("modules/ai-scripts.json").hooksRemovidos).toBe(true);
 
     await second.installProtection("ai-scripts");
-    expect(hasProtection("ai-scripts")).toBe(true);
+    expect(dispatchCommands()).toHaveLength(1);
+    expect(installedOf(second, "ai-scripts").map((e) => e.type)).toEqual(["protecao"]);
     expect(state("modules/ai-scripts.json").hooksRemovidos).toBeUndefined();
   });
 
@@ -296,7 +415,7 @@ describe("module setup states", () => {
     enabled.add("ai-scripts");
     const manager = await started();
     expect((await manager.installProtection("ai-scripts")).ok).toBe(true);
-    expect(JSON.stringify(settings())).toContain("ai-scripts protecao");
+    expect(dispatchCommands()).toHaveLength(1);
 
     enabled.delete("ai-scripts");
     registry.remove("ai-scripts");
@@ -304,7 +423,8 @@ describe("module setup states", () => {
     await sleep(80);
 
     expect(state("modules/ai-scripts.json").estado).toBe("desativado");
-    expect(JSON.stringify(settings())).not.toContain("ai-scripts protecao");
+    // It was the only module that needed the dispatch entry, so the entry goes with it.
+    expect(dispatchCommands()).toEqual([]);
     expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
     expect(manager.getStatus().modules.find((m) => m.id === "ai-scripts")).toMatchObject({ estado: "desativado", registered: false });
   });
@@ -320,7 +440,7 @@ describe("module setup states", () => {
     await sleep(80);
 
     expect(state("modules/ai-scripts.json").estado).toBe("configurado");
-    expect(JSON.stringify(settings())).toContain("ai-scripts protecao");
+    expect(dispatchCommands()).toHaveLength(1);
   });
 
   it("does nothing when the module registered again before the check, or after dispose", async () => {
@@ -352,37 +472,57 @@ describe("module setup states", () => {
 });
 
 describe("protection hooks of a module", () => {
-  /** The PreToolUse groups of the modules (the core's own tools_run approval left out). */
-  const modulePre = (): any[] => (settings()?.hooks?.PreToolUse ?? []).filter((g: any) => !String(g.hooks[0].command).endsWith(" ai-ecosystem execucao"));
+  /** The PreToolUse groups of the modules. */
+  const modulePre = (): any[] => settings()?.hooks?.PreToolUse ?? [];
 
-  it("installs the core approval of tools_run next to the failure entry", async () => {
+  it("does not install an approval for tools_run", async () => {
     const manager = await started();
-    const pre = settings().hooks.PreToolUse;
-    expect(pre).toEqual([
-      {
-        matcher: "mcp__.*__tools_run",
-        hooks: [{ type: "command", command: `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-ecosystem execucao`, timeout: 10 }],
-      },
-    ]);
-    expect(manager.getStatus().coreRunApprovalInstalled).toBe(true);
+    expect(settings().hooks.PreToolUse).toBeUndefined();
+    expect(manager.getStatus()).not.toHaveProperty("coreRunApprovalInstalled");
   });
 
-  it("installs on request, once, and removes from both settings files", async () => {
+  it("removes the execucao entry of an older version and keeps the entries of the user", async () => {
+    const claude = path.join(vault, ".claude");
+    fs.mkdirSync(claude, { recursive: true });
+    const oldRun = {
+      matcher: "mcp__.*__tools_run",
+      hooks: [{ type: "command", command: `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" ai-ecosystem execucao`, timeout: 10 }],
+    };
+    const mine = { hooks: [{ type: "command", command: "echo oi" }] };
+    fs.writeFileSync(path.join(claude, "settings.local.json"), JSON.stringify({ hooks: { PreToolUse: [oldRun, mine] } }));
+
+    await started();
+    expect(settings().hooks.PreToolUse).toEqual([mine]);
+    expect(JSON.stringify(settings())).not.toContain("execucao");
+    expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
+  });
+
+  it("installs one dispatch entry for two modules, once; removing the last module takes it out", async () => {
     registry.add("ai-templates");
+    registry.add("ai-scripts");
     const manager = await started();
-    // The module is legacy, so the core already installed the entry.
-    expect(await manager.installProtection("ai-templates")).toEqual({ ok: true, changed: false });
-    expect(modulePre()).toHaveLength(1);
-    expect(manager.getStatus().modules[0]!.installed).toHaveLength(1);
+    // Both modules are legacy, so the core already installed the single dispatch entry.
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
+    expect(installedOf(manager, "ai-templates").map((e) => e.type)).toEqual(["protecao"]);
 
-    expect(manager.removeModule("ai-templates")).toEqual({ ok: true, changed: true });
-    expect(await manager.installProtection("ai-templates")).toEqual({ ok: true, changed: true });
-    expect(manager.removeModule("ai-templates")).toEqual({ ok: true, changed: true });
-    expect(modulePre()).toHaveLength(0);
-    expect(manager.getStatus().modules[0]!.installed).toHaveLength(0);
+    expect(await manager.installProtection("ai-templates")).toEqual({ ok: true, changed: false });
+    expect(dispatchCommands()).toHaveLength(1);
+
+    // The other module still needs the entry: only the line of the removed module goes.
+    expect(manager.removeByUser("ai-templates")).toEqual({ ok: true, changed: false });
+    expect(dispatchCommands()).toHaveLength(1);
+    expect(installedOf(manager, "ai-templates")).toEqual([]);
+    expect(installedOf(manager, "ai-scripts").map((e) => e.type)).toEqual(["protecao"]);
+
+    expect(manager.removeByUser("ai-scripts")).toEqual({ ok: true, changed: true });
+    expect(dispatchCommands()).toEqual([]);
+    expect(installedOf(manager, "ai-scripts")).toEqual([]);
+    // The core's own entries stay.
+    expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
   });
 
-  it("installs only the protection entry of AI Git Tools (no merge approval), and keeps it in mode off", async () => {
+  it("installs only the dispatch entry for AI Git Tools (no merge approval), and keeps it in mode off", async () => {
     const manager = await started();
     registry.add("ai-git-tools");
     manager.handleRegistryChange({ type: "module-registered", moduleId: "ai-git-tools" });
@@ -390,22 +530,23 @@ describe("protection hooks of a module", () => {
     manager.setMode("ai-git-tools", "off");
     expect(await manager.installProtection("ai-git-tools")).toMatchObject({ ok: true });
     const pre = modulePre();
-    expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Bash|PowerShell"]);
-    expect(pre[0].hooks[0].command).toContain("ai-git-tools protecao");
+    expect(pre.map((g: { matcher: string }) => g.matcher)).toEqual(["Grep|Glob|Bash|PowerShell|Write"]);
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
     expect(JSON.stringify(settings())).not.toContain("git_pr_merge");
     expect(state("config.json").modos["ai-git-tools"]).toBe("off");
 
     // Reapplying does not duplicate anything.
     expect(await manager.installProtection("ai-git-tools")).toEqual({ ok: true, changed: false });
-    expect(modulePre()).toHaveLength(1);
+    expect(dispatchCommands()).toHaveLength(1);
     const row = manager.getStatus().modules.find((m) => m.id === "ai-git-tools")!;
     expect(row.installed.map((e) => e.type).sort()).toEqual(["protecao"]);
     expect(row.mode).toBe("off");
 
-    expect(manager.removeModule("ai-git-tools")).toEqual({ ok: true, changed: true });
-    expect(modulePre()).toHaveLength(0);
+    expect(manager.removeByUser("ai-git-tools")).toEqual({ ok: true, changed: true });
+    expect(dispatchCommands()).toEqual([]);
     // The core's own entries stay.
-    expect(JSON.stringify(settings())).toContain("ai-ecosystem execucao");
+    expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
   });
 
   it("writes the default mode avisar of AI Git Tools explicitly, and plans its protection entry", async () => {
@@ -416,7 +557,7 @@ describe("protection hooks of a module", () => {
 
     const plan = await manager.planInstall("ai-git-tools");
     expect(plan.entries.map((e) => [e.matcher, e.command.split(" ").slice(-2).join(" ")])).toEqual([
-      ["Bash|PowerShell", "ai-git-tools protecao"],
+      ["Grep|Glob|Bash|PowerShell|Write", "ai-ecosystem despacho"],
     ]);
 
     expect((await manager.installProtection("ai-git-tools")).ok).toBe(true);
@@ -445,8 +586,8 @@ describe("protection hooks of a module", () => {
     expect(plan.entries).toEqual([
       {
         event: "PreToolUse",
-        matcher: "Bash|PowerShell",
-        command: `node "${vault.replace(/\\/g, "/")}/.claude/ai-ecosystem/hooks/ai-ecosystem-hook.mjs" environment-variables protecao`,
+        matcher: "Grep|Glob|Bash|PowerShell|Write",
+        command: dispatchCommand(),
       },
     ]);
     expect(plan.node.available).toBe(true);
@@ -478,7 +619,7 @@ describe("protection hooks of a module", () => {
     await manager.installProtection("ai-scripts");
     expect(manager.useSettingsFile("settings.json")).toEqual({ ok: true, changed: true });
 
-    expect(JSON.stringify(settings("settings.json"))).toContain("ai-scripts protecao");
+    expect(dispatchCommands("settings.json")).toEqual([dispatchCommand()]);
     expect(JSON.stringify(settings("settings.json"))).toContain("ai-ecosystem falha");
     expect(settings("settings.local.json")).toEqual({});
     expect(state("config.json").settingsFile).toBe("settings.json");
@@ -613,18 +754,21 @@ describe("temporary setup hook and listener", () => {
 
     for (const event of ["SessionStart", "UserPromptSubmit"]) {
       const groups = settings().hooks[event] as any[];
-      expect(groups).toHaveLength(1);
-      expect(groups[0].matcher).toBeUndefined();
-      expect(groups[0].hooks[0].command).toContain("ai-templates setup");
-      expect(groups[0].hooks[0].timeout).toBe(10);
+      // SessionStart also carries the core's resumo entry, in a group of its own.
+      expect(groups).toHaveLength(event === "SessionStart" ? 2 : 1);
+      const setup = groups.find((g) => g.hooks[0].command.includes("ai-templates setup"));
+      expect(setup.matcher).toBeUndefined();
+      expect(setup.hooks[0].timeout).toBe(10);
     }
     expect(manager.getStatus().modules.find((m) => m.id === "ai-templates")).toMatchObject({ setupHook: true });
 
     const removed = manager.removeSetupHook("ai-templates");
     expect(removed).toEqual({ ok: true, changed: true });
-    expect(settings().hooks.SessionStart).toBeUndefined();
+    // Only the core's resumo entry is left on SessionStart.
+    expect(JSON.stringify(settings().hooks.SessionStart)).not.toContain("ai-templates setup");
+    expect(JSON.stringify(settings().hooks.SessionStart)).toContain("ai-ecosystem resumo");
     expect(settings().hooks.UserPromptSubmit).toBeUndefined();
-    expect(JSON.stringify(settings())).toContain("ai-templates protecao");
+    expect(dispatchCommands()).toHaveLength(1);
     expect(manager.removeSetupHook("ai-templates")).toEqual({ ok: true, changed: false });
   });
 
@@ -643,10 +787,14 @@ describe("temporary setup hook and listener", () => {
 
     expect((await manager.installSetupHook("ai-templates")).ok).toBe(true);
     expect(settings().hooks.UserPromptSubmit).toHaveLength(2);
-    expect(settings().hooks.SessionStart).toHaveLength(2);
+    // The user's group, the core's resumo group and the setup group.
+    expect(settings().hooks.SessionStart).toHaveLength(3);
 
     manager.removeSetupHook("ai-templates");
-    expect(settings().hooks.SessionStart).toEqual([mine]);
+    // The user's group and the core's resumo group stay on SessionStart.
+    expect(settings().hooks.SessionStart).toHaveLength(2);
+    expect(settings().hooks.SessionStart).toContainEqual(mine);
+    expect(JSON.stringify(settings().hooks.SessionStart)).toContain("ai-ecosystem resumo");
     expect(settings().hooks.UserPromptSubmit).toEqual([mine]);
   });
 
@@ -684,7 +832,9 @@ describe("temporary setup hook and listener", () => {
 
     const second = await started();
     expect(second.service.getModuleState("ai-scripts")).toBe("pendente_configuracao");
-    expect(JSON.stringify(settings())).not.toContain("ai-scripts protecao");
+    // Nothing needs the dispatch entry any more: it goes at the start.
+    expect(dispatchCommands()).toEqual([]);
+    expect(legacyCommands()).toEqual([]);
   });
 
   it("brings a configured catalog module back to configured, not pending, when its marker exists", async () => {
@@ -697,5 +847,98 @@ describe("temporary setup hook and listener", () => {
 
     const second = await started();
     expect(second.service.getModuleState("ai-scripts")).toBe("configurado");
+  });
+});
+
+describe("dispatch entry", () => {
+  it("replaces the old per-module protection entries with the dispatch entry, and keeps the user's entries", async () => {
+    await oldVault();
+    const second = await started();
+    expect(dispatchCommands()).toEqual([dispatchCommand()]);
+    expect(legacyCommands()).toEqual([]);
+    // The user's group stays, next to the one dispatch group.
+    expect(settings().hooks.PreToolUse).toContainEqual({ hooks: [mineHook] });
+    expect(settings().hooks.PreToolUse).toHaveLength(2);
+    // A setup entry is not a protection entry: it stays.
+    expect(JSON.stringify(settings().hooks.SessionStart)).toContain("ai-scripts setup");
+    expect(installedOf(second, "ai-git-tools").map((e) => e.type)).toEqual(["protecao"]);
+    expect(installedOf(second, "ai-scripts").map((e) => e.type).sort()).toEqual(["protecao", "setup"]);
+  });
+
+  it("runs the migration once: starting again changes nothing in the settings file", async () => {
+    const file = await oldVault();
+    const first = await started();
+    first.dispose();
+    const afterFirst = fs.readFileSync(file, "utf8");
+    expect(dispatchCommands()).toHaveLength(1);
+
+    await started();
+    expect(fs.readFileSync(file, "utf8")).toBe(afterFirst);
+    expect(dispatchCommands()).toHaveLength(1);
+    expect(legacyCommands()).toEqual([]);
+  });
+
+  it("leaves the old entries alone without Node.js, and writes nothing", async () => {
+    const file = await oldVault();
+    const before = fs.readFileSync(file, "utf8");
+    await started({ nodeChecker: nodeMissing() });
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("does not show a module whose hooks were removed as installed, and the last removal takes the dispatch entry with it", async () => {
+    registry.add("ai-scripts");
+    registry.add("ai-templates");
+    const manager = await started();
+    expect(dispatchCommands()).toHaveLength(1);
+
+    expect(manager.removeByUser("ai-templates")).toEqual({ ok: true, changed: false });
+    expect(state("modules/ai-templates.json").hooksRemovidos).toBe(true);
+    expect(installedOf(manager, "ai-templates")).toEqual([]);
+    expect(installedOf(manager, "ai-scripts").map((e) => e.type)).toEqual(["protecao"]);
+    expect(dispatchCommands()).toHaveLength(1);
+
+    expect(manager.removeByUser("ai-scripts")).toEqual({ ok: true, changed: true });
+    expect(installedOf(manager, "ai-scripts")).toEqual([]);
+    expect(dispatchCommands()).toEqual([]);
+    expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
+  });
+
+  it("a disabled module stops counting: the dispatch entry goes with the last one", async () => {
+    registry.add("ai-scripts");
+    registry.add("ai-templates");
+    enabled.add("ai-scripts");
+    enabled.add("ai-templates");
+    const manager = await started();
+    expect(dispatchCommands()).toHaveLength(1);
+
+    enabled.delete("ai-scripts");
+    registry.remove("ai-scripts");
+    manager.handleRegistryChange({ type: "module-unregistered", moduleId: "ai-scripts" });
+    await sleep(80);
+    expect(state("modules/ai-scripts.json").estado).toBe("desativado");
+    expect(installedOf(manager, "ai-scripts")).toEqual([]);
+    expect(dispatchCommands()).toHaveLength(1);
+
+    enabled.delete("ai-templates");
+    registry.remove("ai-templates");
+    manager.handleRegistryChange({ type: "module-unregistered", moduleId: "ai-templates" });
+    await sleep(80);
+    expect(state("modules/ai-templates.json").estado).toBe("desativado");
+    expect(dispatchCommands()).toEqual([]);
+  });
+
+  it("the last removal takes the dispatch entry out of both settings files", async () => {
+    registry.add("ai-scripts");
+    const manager = await started();
+    // An entry left in the other settings file (for instance by an older move).
+    fs.writeFileSync(
+      path.join(vault, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Grep|Glob|Bash|PowerShell|Write", hooks: [{ type: "command", command: dispatchCommand(), timeout: 10 }] }] } }),
+    );
+    expect(dispatchCommands("settings.json")).toHaveLength(1);
+
+    expect(manager.removeByUser("ai-scripts")).toEqual({ ok: true, changed: true });
+    expect(dispatchCommands()).toEqual([]);
+    expect(dispatchCommands("settings.json")).toEqual([]);
   });
 });

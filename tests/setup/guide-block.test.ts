@@ -10,7 +10,8 @@ describe("buildGuideBlock", () => {
     expect(lines[0]).toBe(BLOCK_START);
     expect(lines[lines.length - 1]).toBe(BLOCK_END);
     expect(block).toContain("| Task | Plugin | Tools |");
-    expect(block).toContain("| Search, list or read something inside the vault | AI Vault Search | `search`, `find`, `get_section`, `read_table`, `list_folders`, `list_files` |");
+    expect(block).toContain("| Search, list or read something inside the vault | AI Vault Search | `search`, `find`, `get_section`, `get_note`, `read_table`, `list_folders`, `list_files`, `list_tags`, `recent_notes` |");
+    expect(block).not.toContain("search_notes");
     expect(block).toContain("`list_ai_scripts`");
     // The core is always there; modules that are not installed are not.
     expect(block).toContain("`ecosystem_status`");
@@ -34,7 +35,7 @@ describe("buildGuideBlock", () => {
     const all = knownGuideModules();
     expect(all).toEqual(["ai-ecosystem", "ai-vault-search", "ai-scripts", "ai-templates", "ai-log-manager", "ai-git-tools", "environment-variables", "telegram-ai-gateway"]);
     const block = buildGuideBlock({ lang: "pt", modules: all, target: "claude" });
-    for (const tool of ["search", "run_ai_script", "create_note_from_template", "http_request", "env_criar_secret", "telegram_ask_approval", "tela_criar"]) {
+    for (const tool of ["search", "run_ai_script", "create_note_from_template", "http_request", "env_criar_secret", "telegram_ask_approval", "tela_gerenciar"]) {
       expect(block).toContain(`\`${tool}\``);
     }
     expect(block).toContain("| Tarefa | Plugin | Tools |");

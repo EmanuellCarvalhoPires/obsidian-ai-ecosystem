@@ -6,7 +6,20 @@ import type { ActivityEntry } from "../types";
 export interface ActivityDatabaseOptions {
   /** Absolute path to the sqlite file on disk, or ":memory:". */
   filePath: string;
+  /** Maximum number of rows kept in activity_log. Default 3000. */
+  maxRows?: number;
+  /** Maximum age of a row in milliseconds. Default 7 days. */
+  maxAgeMs?: number;
+  /** Maximum characters kept in payload, response and output. Default 4000. */
+  textCap?: number;
+  /** Run the count/age pruning every N writes. Default 200. */
+  pruneEvery?: number;
 }
+
+const DEFAULT_MAX_ROWS = 3000;
+const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_TEXT_CAP = 4000;
+const DEFAULT_PRUNE_EVERY = 200;
 
 interface ActivityRow {
   id: string | number;
@@ -35,9 +48,18 @@ export class ActivityDatabase {
   private insertStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
   private updateStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
   private clearStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
+  private readonly maxRows: number;
+  private readonly maxAgeMs: number;
+  private readonly textCap: number;
+  private readonly pruneEvery: number;
+  private writes = 0;
 
   constructor(opts: ActivityDatabaseOptions) {
     this.filePath = opts.filePath;
+    this.maxRows = opts.maxRows ?? DEFAULT_MAX_ROWS;
+    this.maxAgeMs = opts.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+    this.textCap = opts.textCap ?? DEFAULT_TEXT_CAP;
+    this.pruneEvery = opts.pruneEvery ?? DEFAULT_PRUNE_EVERY;
     this.init();
   }
 
@@ -125,6 +147,8 @@ export class ActivityDatabase {
     `);
 
     this.clearStmt = this.db.prepare("DELETE FROM activity_log");
+
+    this.prune(true);
   }
 
   save(entry: ActivityEntry): void {
@@ -141,9 +165,9 @@ export class ActivityDatabase {
         entry.status,
         entry.durationMs,
         JSON.stringify(entry.requestHeaders ?? {}),
-        entry.payload ?? "",
-        entry.response ?? "",
-        entry.output ?? "",
+        this.clipText(entry.payload ?? "", "start"),
+        this.clipText(entry.response ?? "", "start"),
+        this.clipText(entry.output ?? "", "end"),
         entry.alert ? 1 : 0,
         entry.running ? 1 : 0,
         entry.tokens?.input ?? null,
@@ -153,6 +177,8 @@ export class ActivityDatabase {
     } catch (err) {
       console.warn("Failed to save activity entry to SQLite database", err);
     }
+    this.writes++;
+    if (this.writes % this.pruneEvery === 0) this.prune(false);
   }
 
   update(entry: ActivityEntry): void {
@@ -163,9 +189,9 @@ export class ActivityDatabase {
         entry.status,
         entry.durationMs,
         JSON.stringify(entry.requestHeaders ?? {}),
-        entry.payload ?? "",
-        entry.response ?? "",
-        entry.output ?? "",
+        this.clipText(entry.payload ?? "", "start"),
+        this.clipText(entry.response ?? "", "start"),
+        this.clipText(entry.output ?? "", "end"),
         entry.alert ? 1 : 0,
         entry.running ? 1 : 0,
         entry.tokens?.input ?? null,
@@ -175,6 +201,35 @@ export class ActivityDatabase {
       );
     } catch (err) {
       console.warn("Failed to update activity entry in SQLite database", err);
+    }
+  }
+
+  private clipText(text: string, keep: "start" | "end"): string {
+    const cap = this.textCap;
+    if (text.length <= cap) return text;
+    const omitted = text.length - cap;
+    if (keep === "start") {
+      return text.slice(0, cap) + "\n[... " + omitted + " characters omitted]";
+    }
+    return "[... " + omitted + " characters omitted]\n" + text.slice(text.length - cap);
+  }
+
+  private prune(initial: boolean): void {
+    if (!this.db) return;
+    try {
+      const cutoff = Date.now() - this.maxAgeMs;
+      const byAge = this.db.prepare("DELETE FROM activity_log WHERE time < ?").run(cutoff);
+      const byCount = this.db
+        .prepare(
+          "DELETE FROM activity_log WHERE id IN (SELECT id FROM activity_log ORDER BY time DESC, id DESC LIMIT -1 OFFSET ?)",
+        )
+        .run(this.maxRows);
+      if (initial && Number(byAge.changes) + Number(byCount.changes) > 0) {
+        this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        this.db.exec("VACUUM;");
+      }
+    } catch (err) {
+      console.warn("Failed to prune activity log in SQLite database", err);
     }
   }
 

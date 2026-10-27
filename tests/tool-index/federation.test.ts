@@ -188,7 +188,7 @@ describe("discovery tools", () => {
       findTool: (name) => tools.find((t) => t.tool.name === name),
       getService: <T>(name: string) => services.get(name) as T | undefined,
       isHidden: (moduleId) => hiddenModules.has(moduleId),
-      onToolResult: (moduleId, isError) => results.push([moduleId, isError]),
+      onToolResult: (moduleId, failed) => results.push([moduleId, failed]),
     };
     return Object.fromEntries(createDiscoveryTools(deps).map((t) => [t.name, t]));
   }
@@ -259,6 +259,24 @@ describe("discovery tools", () => {
     expect(results).toEqual([["ai-git-tools", true]]);
   });
 
+  it("tools_run does not count an answer with isError as a failure of the module", async () => {
+    const answer: HubToolResult = { content: [{ type: "text", text: "Invalid arguments: mensagem is required." }], isError: true };
+    register("ai-git-tools", tool("git_commit", { handler: async () => answer }));
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ id: "git_commit", args: {} }, ctx);
+    expect(result).toBe(answer);
+    expect(results).toEqual([["ai-git-tools", false]]);
+  });
+
+  it("tools_run marks the module as failed when it has no runner for an index-only tool", async () => {
+    index("environment-variables", [{ name: "jira_get_changelogs", kind: "api", description: "x", efeito: "leitura" }]);
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ id: "jira_get_changelogs", args: {} }, ctx);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("not running it now");
+    expect(results).toEqual([["environment-variables", true]]);
+  });
+
   it("tools_run hands index-only entries to the module's runner service", async () => {
     index("environment-variables", [{ name: "jira_get_changelogs", kind: "api", description: "x", efeito: "leitura" }]);
     const calls: Array<[string, unknown, string]> = [];
@@ -284,5 +302,74 @@ describe("discovery tools", () => {
     expect((await tools_run!.handler({ id: "tools_run" }, ctx)).isError).toBe(true);
     hiddenModules.add("ai-git-tools");
     expect(textOf(await tools_run!.handler({ id: "git_status" }, ctx))).toContain("configurar-ai-git-tools");
+  });
+
+  it("tools_run runs a batch one after the other and summarizes each answer", async () => {
+    register("ai-git-tools", tool("git_status"), tool("git_commit"));
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ calls: [{ id: "git_status" }, { id: "git_commit", args: { mensagem: "x" } }] }, ctx);
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toBe('[1/2] git_status -> ok\ngit_status:{}\n\n[2/2] git_commit -> ok\ngit_commit:{"mensagem":"x"}');
+    expect(results).toEqual([["ai-git-tools", false], ["ai-git-tools", false]]);
+  });
+
+  it("tools_run keeps running the batch after an item throws, and the batch is not an error", async () => {
+    register("ai-git-tools", tool("git_push", { handler: async () => Promise.reject(new Error("boom")) }));
+    register("ai-vault-search", tool("list_files"));
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ calls: [{ id: "git_push" }, { id: "list_files" }] }, ctx);
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toContain("[1/2] git_push -> error\nError: boom");
+    expect(textOf(result)).toContain("[2/2] list_files -> ok");
+    expect(results).toEqual([["ai-git-tools", true], ["ai-vault-search", false]]);
+  });
+
+  it("tools_run marks the batch as an error only when every item fails", async () => {
+    register("ai-git-tools", tool("git_push", { handler: async () => Promise.reject(new Error("boom")) }));
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ calls: [{ id: "git_push" }, { id: "nope" }] }, ctx);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("[2/2] nope -> error\nUnknown tool: nope");
+  });
+
+  it("tools_run cuts a long answer inside a batch and says how much was left out", async () => {
+    register("ai-git-tools", tool("git_status", { handler: async () => ({ content: [{ type: "text", text: "x".repeat(3000) }] }) }));
+    const { tools_run } = discovery();
+    const out = textOf(await tools_run!.handler({ calls: [{ id: "git_status" }] }, ctx));
+    expect(out).toContain("x".repeat(1500));
+    expect(out).not.toContain("x".repeat(1501));
+    expect(out).toContain("[... 1500 characters omitted; call the tool alone for the full answer ...]");
+  });
+
+  it("tools_run refuses calls together with id", async () => {
+    register("ai-git-tools", tool("git_status"));
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ id: "git_status", calls: [{ id: "git_status" }] }, ctx);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("not both");
+  });
+
+  it("tools_run refuses batches of more than 10 items or none", async () => {
+    register("ai-git-tools", tool("git_status"));
+    const { tools_run } = discovery();
+    const eleven = await tools_run!.handler({ calls: Array.from({ length: 11 }, () => ({ id: "git_status" })) }, ctx);
+    expect(eleven.isError).toBe(true);
+    expect(textOf(eleven)).toContain("calls must be a list of 1 to 10 items");
+    const empty = await tools_run!.handler({ calls: [] }, ctx);
+    expect(empty.isError).toBe(true);
+    expect(textOf(empty)).toContain("calls must be a list of 1 to 10 items");
+  });
+
+  it("tools_run applies the single-call rules to each batch item", async () => {
+    register("ai-git-tools", tool("git_status"));
+    register("ai-hidden", tool("hidden_tool"));
+    hiddenModules.add("ai-hidden");
+    const { tools_run } = discovery();
+    const result = await tools_run!.handler({ calls: [{ id: "tools_run" }, { id: "hidden_tool" }, { args: {} }, { id: "git_status" }] }, ctx);
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toContain("[1/4] tools_run -> error\ntools_run cannot run itself");
+    expect(textOf(result)).toContain("[2/4] hidden_tool -> error\nThe module \"ai-hidden\" has not been set up yet");
+    expect(textOf(result)).toContain("[3/4] (no id) -> error\nInvalid arguments: item needs an id.");
+    expect(textOf(result)).toContain("[4/4] git_status -> ok");
   });
 });

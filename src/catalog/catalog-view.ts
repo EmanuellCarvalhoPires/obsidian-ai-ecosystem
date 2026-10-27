@@ -6,6 +6,7 @@ import type { Catalog, CatalogEntry, ModuleInstallState } from "../types";
 import type { CatalogService } from "./catalog-service";
 import { installFromCatalog } from "./install-flow";
 import type { CatalogSetupHost } from "./install-flow";
+import { latestVersionOf } from "./installer-service";
 import type { InstallerService, InstallResult, LatestRelease } from "./installer-service";
 
 export const CATALOG_VIEW_TYPE = "ai-ecosystem-catalog";
@@ -133,7 +134,7 @@ export class CatalogView extends ItemView {
 
   private renderCard(grid: HTMLElement, entry: CatalogEntry): void {
     const release = this.releases.get(entry.id);
-    const latestVersion = release && "version" in release ? release.version : undefined;
+    const latestVersion = latestVersionOf(release);
     const noRelease = !!release && "error" in release && release.error === "No release published yet";
     const state = this.deps.installer.getState(entry, latestVersion);
 

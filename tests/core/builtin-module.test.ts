@@ -75,8 +75,49 @@ describe("built-in module", () => {
     expect(text).toContain("environment-variables (Environment Keys 2.0.0): 2 tools");
     expect(text).toContain("warning: Skipped tool x");
     expect(text).toContain("secrets (provided by environment-variables)");
-    expect(result.structuredContent).toMatchObject({ version: "1.0.0", apiVersion: 1, server, services });
-    expect((result.structuredContent as { modules: ModuleInfo[] }).modules[0]?.toolNames).toEqual(["http_request", "list_secrets"]);
+    expect(result.structuredContent).toMatchObject({ version: "1.0.0", apiVersion: 1, server });
+    expect((result.structuredContent as { services: unknown }).services).toEqual([{ name: "secrets", ownerModuleId: "environment-variables" }]);
+    const first = (result.structuredContent as { modules: Array<Record<string, unknown>> }).modules[0];
+    expect(first).toMatchObject({ id: "environment-variables", tools: 2, prompts: 0, routes: 1, warnings: ["Skipped tool x"] });
+    expect(first).not.toHaveProperty("toolNames");
+  });
+
+  it("ecosystem_status lists the tool names only with detalhe true", async () => {
+    const tool = createBuiltinModule(deps()).tools?.find((t) => t.name === "ecosystem_status");
+    const ctx = { client: request.client, moduleId: "ai-ecosystem" };
+    const result = await tool!.handler({ detalhe: true }, ctx);
+    expect(result.isError).toBeUndefined();
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("  tools: http_request, list_secrets");
+    const first = (result.structuredContent as { modules: Array<Record<string, unknown>> }).modules[0];
+    expect(first?.toolNames).toEqual(["http_request", "list_secrets"]);
+  });
+
+  it("ecosystem_status returns only the asked module with its tool names", async () => {
+    const tool = createBuiltinModule(deps()).tools?.find((t) => t.name === "ecosystem_status");
+    const ctx = { client: request.client, moduleId: "ai-ecosystem" };
+    const result = await tool!.handler({ modulo: "environment-variables" }, ctx);
+    expect(result.isError).toBeUndefined();
+    const structured = result.structuredContent as { modules: Array<Record<string, unknown>> };
+    expect(structured.modules).toHaveLength(1);
+    expect(structured.modules[0]?.toolNames).toEqual(["http_request", "list_secrets"]);
+  });
+
+  it("ecosystem_status answers an unknown module with an error that lists the installed ids", async () => {
+    const tool = createBuiltinModule(deps()).tools?.find((t) => t.name === "ecosystem_status");
+    const ctx = { client: request.client, moduleId: "ai-ecosystem" };
+    const result = await tool!.handler({ modulo: "nope" }, ctx);
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Unknown module "nope"');
+    expect(text).toContain("environment-variables");
+  });
+
+  it("GET /status keeps the full body with the tool names", async () => {
+    const route = createBuiltinModule(deps()).routes?.find((r) => r.path === "/status");
+    const res = await route!.handler(request);
+    expect(res.body).toEqual(buildStatus(deps()));
+    expect((res.body as { modules: ModuleInfo[] }).modules[0]?.toolNames).toEqual(["http_request", "list_secrets"]);
   });
 
   it("GET /status returns the same data as JSON without handlers", async () => {
@@ -103,7 +144,7 @@ describe("built-in module", () => {
 });
 
 describe("index metadata of the core tools", () => {
-  it("covers the 11 core tools with a category, a short summary and an effect", () => {
+  it("covers the 10 core tools with a category, a short summary and an effect", () => {
     expect(Object.keys(CORE_TOOL_METADATA).sort()).toEqual([
       "ecosystem_diagnostico",
       "ecosystem_list_scripts",
@@ -112,8 +153,7 @@ describe("index metadata of the core tools", () => {
       "ecosystem_setup_save",
       "ecosystem_setup_status",
       "ecosystem_status",
-      "tela_criar",
-      "tela_editar",
+      "tela_gerenciar",
       "tela_listar",
       "tela_remover",
     ]);

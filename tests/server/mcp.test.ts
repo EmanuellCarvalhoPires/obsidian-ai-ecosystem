@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { HubTool } from "../../src/types";
-import { startRig, rpc, type TestRig } from "./helpers";
+import { FakeRegistry, startRig, rpc, type TestRig } from "./helpers";
 
 const echoTool: HubTool = {
   name: "echo",
@@ -187,6 +187,40 @@ describe("MCP Streamable HTTP", () => {
     expect(get.headers.get("allow")).toBe("POST, DELETE");
     const del = await fetch(`${rig.base}/mcp`, { method: "DELETE", headers: rig.auth({ "Mcp-Session-Id": "abc" }) });
     expect(del.status).toBe(200);
+  });
+});
+
+describe("tools/list option isListedWhenComplete (modo completo)", () => {
+  function registerTools(registry: FakeRegistry) {
+    registry.add({ id: "mod-a", instructions: "", tools: [echoTool, failingTool] });
+  }
+
+  it("lists every registered tool when the option is absent", async () => {
+    rig = await startRig(registerTools);
+    const list = (await (await rpc(rig, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as any;
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["echo", "explode"]);
+  });
+
+  it("leaves a tool out of tools/list when the option says false, and tools/call still runs it by name", async () => {
+    rig = await startRig(registerTools, {
+      isListedWhenComplete: (registered) => registered.tool.name !== "echo",
+    });
+    const list = (await (await rpc(rig, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as any;
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["explode"]);
+
+    const call = (await (await rpc(rig, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "echo", arguments: { text: "hi" } } })).json()) as any;
+    expect(call.result.isError).toBeUndefined();
+    expect(call.result.content[0].text).toBe("hi from Test Client via mod-a");
+  });
+
+  it("keeps a tool listed when the option throws", async () => {
+    rig = await startRig(registerTools, {
+      isListedWhenComplete: () => {
+        throw new Error("option broke");
+      },
+    });
+    const list = (await (await rpc(rig, { jsonrpc: "2.0", id: 1, method: "tools/list" })).json()) as any;
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["echo", "explode"]);
   });
 });
 

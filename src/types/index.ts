@@ -175,9 +175,8 @@ export interface HubTool {
   efeito?: ToolEffect;
   exposicao?: ToolExposure;
   /**
-   * Approval policy read by the tools_run hook: a question template with {arg} placeholders
-   * (e.g. "Posso fazer o merge do PR #{numero} para a branch {destino}?"), "obrigatoria" (always
-   * ask) or "dispensada" (never ask, even with efeito "externo"). Without it, "externo" asks.
+   * Approval policy metadata kept in the tool index ("obrigatoria", "dispensada" or a question
+   * template with {arg} placeholders). No core hook reads it any more: the tools_run approval was removed.
    */
   aprovacao?: string;
   /** Example arguments shown by tools_describe. */
@@ -695,7 +694,7 @@ export interface AIEcosystemSettings {
   importedClientsFrom: string[];
   scripts: ScriptSettings;
   inspector: { maxEntries: number };
-  /** Screens the agent can create (tela_criar). */
+  /** Screens the agent can create (tela_gerenciar). */
   screens: { maxScreens: number };
   /** tools/list exposure per kind of client (indexed discovery). */
   toolExposure: ToolExposureSettings;

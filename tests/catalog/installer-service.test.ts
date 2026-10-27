@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
-import { HttpError, InstallerService } from "../../src/catalog/installer-service";
+import { HttpError, InstallerService, latestVersionOf } from "../../src/catalog/installer-service";
 import type { CatalogEntry } from "../../src/types";
 
 const entry: CatalogEntry = {
@@ -208,6 +208,31 @@ describe("install", () => {
     expect(r.ok).toBe(false);
     expect(plugins.installPlugin).not.toHaveBeenCalled();
     expect(fetchJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("latestVersionOf", () => {
+  it("returns the manifest version, not the tag", () => {
+    expect(latestVersionOf({ version: "v1.2.0", manifest: { id: "x", version: "1.2.0" } })).toBe("1.2.0");
+  });
+  it("returns undefined for an error or no release", () => {
+    expect(latestVersionOf({ error: "No release published yet" })).toBeUndefined();
+    expect(latestVersionOf(undefined)).toBeUndefined();
+  });
+  it("does not show an update when the installed version equals the manifest version of a v-prefixed tag", () => {
+    const { svc, manifests, enabled } = setup();
+    manifests["ai-templates"] = { id: "ai-templates", version: "1.2.0" };
+    enabled.add("ai-templates");
+    const latest = latestVersionOf({ version: "v1.2.0", manifest: { id: "ai-templates", version: "1.2.0" } });
+    expect(svc.getState(entry, latest)).toMatchObject({ kind: "active", installedVersion: "1.2.0" });
+    expect(svc.getState(entry, latest).kind).not.toBe("update-available");
+  });
+  it("shows an update when the manifest version is newer than the installed one", () => {
+    const { svc, manifests, enabled } = setup();
+    manifests["ai-templates"] = { id: "ai-templates", version: "1.2.0" };
+    enabled.add("ai-templates");
+    const latest = latestVersionOf({ version: "v1.3.0", manifest: { id: "ai-templates", version: "1.3.0" } });
+    expect(svc.getState(entry, latest)).toMatchObject({ kind: "update-available", latestVersion: "1.3.0" });
   });
 });
 

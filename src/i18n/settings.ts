@@ -75,8 +75,8 @@ export const settingsStrings: StringTable = {
     "settings.danger.modalConfirm": "Remove restrictions",
 
     "settings.inspector.heading": "Inspector",
-    "settings.inspector.maxEntries": "Entries kept in memory",
-    "settings.inspector.maxEntriesDesc": "History is kept in memory only and is never written to disk.",
+    "settings.inspector.maxEntries": "Entries shown",
+    "settings.inspector.maxEntriesDesc": "Entries shown in the inspector. A trimmed copy of the recent history (at most 3000 entries and 7 days, long texts cut to 4000 characters) is also kept in activity.sqlite in the plugin folder, so it survives a restart.",
     "settings.inspector.open": "Request inspector",
     "settings.inspector.openDesc": "See requests, tool calls and script runs as they happen.",
     "settings.inspector.openButton": "Open inspector",
@@ -237,8 +237,8 @@ export const settingsStrings: StringTable = {
     "settings.danger.modalConfirm": "Remover restrições",
 
     "settings.inspector.heading": "Inspetor",
-    "settings.inspector.maxEntries": "Registros mantidos em memória",
-    "settings.inspector.maxEntriesDesc": "O histórico fica só na memória e nunca é gravado em disco.",
+    "settings.inspector.maxEntries": "Entradas mostradas",
+    "settings.inspector.maxEntriesDesc": "Entradas mostradas no inspetor. Uma cópia reduzida do histórico recente (no máximo 3000 entradas e 7 dias, textos longos cortados em 4000 caracteres) também fica em activity.sqlite na pasta do plugin, para sobreviver a um reinício.",
     "settings.inspector.open": "Inspetor de requisições",
     "settings.inspector.openDesc": "Veja requisições, chamadas de tools e execuções de scripts em tempo real.",
     "settings.inspector.openButton": "Abrir inspetor",

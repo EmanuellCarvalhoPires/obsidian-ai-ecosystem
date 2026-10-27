@@ -11,6 +11,7 @@ import {
   configureCore,
   enableModule,
   hasHook,
+  hasProtection,
   hookCommands,
   registerHandler,
   setupSave,
@@ -19,6 +20,7 @@ import {
   startRig,
   stateFile,
   stopRigs,
+  toolNames,
   writeFile,
 } from "./helpers";
 import type { SetupRig } from "./helpers";
@@ -167,6 +169,36 @@ describe("ecosystem_setup_status", () => {
     expect((await setupStatus(r, "ai-templates")).tools_do_modulo).toEqual([{ nome: "ai_templates_ok", visivel_para_claude_code: true }]);
     await claudeSession(r);
   });
+
+  it("a configured module leaves out the questions and the usage block, with a note, unless completo is true", async () => {
+    const r = await startRig();
+    await configureCore(r);
+    await installFromCatalog(r, "ai-templates", "AI Templates");
+    expect((await callTool(r, "ecosystem_setup_complete", { modulo: "ai-templates" })).isError).toBe(false);
+
+    const compact = await setupStatus(r, "ai-templates");
+    expect(compact.estado).toBe("configurado");
+    expect(compact).not.toHaveProperty("perguntas");
+    expect(compact).not.toHaveProperty("bloco_claude_md");
+    expect(compact.nota).toContain("completo: true");
+    expect(compact.tools_do_modulo).toEqual([{ nome: "ai_templates_ok", visivel_para_claude_code: true }]);
+
+    const full = await setupStatus(r, "ai-templates", true);
+    expect(full.perguntas.length).toBeGreaterThan(0);
+    expect(full.bloco_claude_md.startsWith(BLOCK_START)).toBe(true);
+    expect(full.bloco_claude_md.endsWith(BLOCK_END)).toBe(true);
+    expect(full.nota).toBeUndefined();
+  });
+
+  it("a pending module gets the questions and the usage block, with no note", async () => {
+    const r = await startRig();
+    await installFromCatalog(r, "ai-templates", "AI Templates");
+    const status = await setupStatus(r, "ai-templates");
+    expect(status.estado).toBe("pendente_configuracao");
+    expect(status.perguntas.length).toBeGreaterThan(0);
+    expect(status.bloco_claude_md.startsWith(BLOCK_START)).toBe(true);
+    expect(status.nota).toBeUndefined();
+  });
 });
 
 describe("ecosystem_setup_save: core keys", () => {
@@ -214,7 +246,8 @@ describe("ecosystem_setup_save: core keys", () => {
     await installFromCatalog(r, "ai-git-tools", "AI Git Tools");
     expect((await callTool(r, "ecosystem_setup_complete", { modulo: "ai-git-tools" })).isError).toBe(false);
     expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBe("avisar");
-    expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools protecao"))).toBe(true);
+    expect(hasProtection(r, "ai-git-tools")).toBe(true);
+    expect(hasHook(r, "ai-ecosystem", "despacho")).toBe(true);
     expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools aprovacao"))).toBe(false);
   });
 
@@ -305,6 +338,49 @@ describe("ecosystem_setup_save: core keys", () => {
     expect((await setupSave(r, "ai-scripts", "pastas_permitidas", ["ok"])).isError).toBe(false);
     expect(r.settings.scripts.allowedFolders).toEqual(["ok"]);
   });
+
+  it("saves several answers in one call, in order, and lists them in salvas", async () => {
+    const r = await startRig();
+    const res = await callTool(r, "ecosystem_setup_save", { modulo: "ai-ecosystem", respostas: { agentes: ["claude-code"], modo_hooks: "avisar", claude_md: "permitido" } });
+    expect(res.isError).toBe(false);
+    expect(res.data).toEqual({ ok: true, modulo: "ai-ecosystem", salvas: ["agentes", "modo_hooks", "claude_md"] });
+    const answers = stateFile(r, "modules/ai-ecosystem.json").respostas;
+    expect(answers).toMatchObject({ agentes: ["claude-code"], modo_hooks: "avisar", claude_md: "permitido" });
+    expect(stateFile(r, "config.json").modos["ai-vault-search"]).toBe("avisar");
+  });
+
+  it("a refused answer does not stop the others: the valid ones are saved, the refused one is listed in recusadas", async () => {
+    const r = await startRig();
+    const res = await callTool(r, "ecosystem_setup_save", { modulo: "ai-ecosystem", respostas: { agentes: ["claude-code"], modo_hooks: "x", claude_md: "criar" } });
+    expect(res.isError).toBe(true);
+    expect(res.data.ok).toBe(false);
+    expect(res.data.salvas).toEqual(["agentes", "claude_md"]);
+    expect(Object.keys(res.data.recusadas)).toEqual(["modo_hooks"]);
+    expect(res.data.recusadas.modo_hooks).toContain("modo_hooks must be one of");
+    const answers = stateFile(r, "modules/ai-ecosystem.json").respostas;
+    expect(answers.agentes).toEqual(["claude-code"]);
+    expect(answers.claude_md).toBe("criar");
+    expect(answers.modo_hooks).toBeUndefined();
+  });
+
+  it("refuses respostas together with chave or valor, and an empty respostas", async () => {
+    const r = await startRig();
+    const both = await callTool(r, "ecosystem_setup_save", { modulo: "ai-ecosystem", chave: "claude_md", valor: "criar", respostas: { agentes: ["claude-code"] } });
+    expect(both.isError).toBe(true);
+    expect(both.data.erro).toContain("not both");
+    expect(stateFile(r, "modules/ai-ecosystem.json")?.respostas?.agentes).toBeUndefined();
+
+    const empty = await callTool(r, "ecosystem_setup_save", { modulo: "ai-ecosystem", respostas: {} });
+    expect(empty.isError).toBe(true);
+    expect(empty.data.erro).toContain("1 to 20");
+  });
+
+  it("keeps the single chave and valor answer as it was", async () => {
+    const r = await startRig();
+    const res = await setupSave(r, "ai-ecosystem", "claude_md", "criar");
+    expect(res.isError).toBe(false);
+    expect(res.data).toEqual({ ok: true, modulo: "ai-ecosystem", chave: "claude_md" });
+  });
 });
 
 describe("ecosystem_setup_save: modules", () => {
@@ -382,5 +458,47 @@ describe("a module that does not answer", () => {
     const refused = await callTool(r, "ecosystem_setup_complete", { modulo: "ai-vault-search" });
     expect(refused.isError).toBe(true);
     expect(refused.data.faltando[0]).toContain("validate() did not answer");
+  });
+});
+
+describe("setup tools in tools/list (modo completo)", () => {
+  const SETUP_TOOLS = ["ecosystem_setup_status", "ecosystem_setup_save", "ecosystem_setup_complete"];
+  const setupNames = (names: string[]) => names.filter((name) => name.startsWith("ecosystem_setup_"));
+
+  it("lists the three core setup tools while the core is not configured", async () => {
+    const r = await startRig();
+    expect(setupNames(await toolNames(r))).toEqual(SETUP_TOOLS);
+  });
+
+  it("leaves them out of tools/list once nothing is pending", async () => {
+    const r = await startRig();
+    await configureCore(r);
+    expect(setupNames(await toolNames(r))).toEqual([]);
+  });
+
+  it("still runs them by name while they are left out of tools/list", async () => {
+    const r = await startRig();
+    await configureCore(r);
+    expect(setupNames(await toolNames(r))).toEqual([]);
+    const status = await callTool(r, "ecosystem_setup_status", { modulo: "ai-ecosystem" });
+    expect(status.isError).toBe(false);
+    expect(status.data.modulo).toBe("ai-ecosystem");
+  });
+
+  it("brings them back once a module is installed from the catalog", async () => {
+    const r = await startRig();
+    await configureCore(r);
+    expect(setupNames(await toolNames(r))).toEqual([]);
+    await installFromCatalog(r, "ai-templates", "AI Templates");
+    expect(setupNames(await toolNames(r))).toEqual(SETUP_TOOLS);
+  });
+
+  it("tells the clients the list changed as soon as a catalog install begins", async () => {
+    const r = await startRig();
+    await configureCore(r);
+    const notify = vi.spyOn(r.eco.server, "notifyListChanged");
+    r.eco.setup!.beginCatalogInstall("ai-templates", "AI Templates");
+    expect(notify).toHaveBeenCalledWith("tools");
+    expect(setupNames(await toolNames(r))).toEqual(SETUP_TOOLS);
   });
 });

@@ -3,7 +3,9 @@
 import { ECOSYSTEM_ID } from "../types";
 
 export type HookEvent = "PreToolUse" | "PostToolUseFailure" | "SessionStart" | "UserPromptSubmit";
-export type HookType = "protecao" | "setup" | "falha" | "aprovacao" | "execucao";
+// "execucao" is retired: no entry is written any more, the type stays so that entries from older versions are recognized and removed.
+// "despacho" is the single PreToolUse entry that runs the protection of every module in one process (see DISPATCH_SPEC).
+export type HookType = "protecao" | "setup" | "falha" | "aprovacao" | "execucao" | "resumo" | "despacho";
 
 export const HOOK_SCRIPT_NAME = "ai-ecosystem-hook.mjs";
 /** Seconds Claude Code waits for the script (a timeout never blocks the tool call). */
@@ -25,6 +27,15 @@ const PROTECTION_SPECS: Record<string, Pick<HookSpec, "event" | "matcher">> = {
   "ai-templates": { event: "PreToolUse", matcher: "Write" },
   "ai-git-tools": { event: "PreToolUse", matcher: "Bash|PowerShell" },
 };
+
+/** Every tool name the protection hooks look at, joined as one matcher (Grep|Glob|Bash|PowerShell|Write). */
+export const DISPATCH_MATCHER = Array.from(new Set(Object.values(PROTECTION_SPECS).flatMap((spec) => (spec.matcher ?? "").split("|")))).join("|");
+
+/**
+ * One entry that runs the protection of every module in a single process (type despacho), instead of
+ * one Node process per protection hook. Its decisions are the same as the separate hooks'. Not in CORE_SPECS.
+ */
+export const DISPATCH_SPEC: HookSpec = { module: ECOSYSTEM_ID, type: "despacho", event: "PreToolUse", matcher: DISPATCH_MATCHER };
 
 /**
  * The merge approval of AI Git Tools: always on (whatever the mode of the module's protection
@@ -56,20 +67,15 @@ export const CORE_FAILURE_SPEC: HookSpec = {
   matcher: "mcp__.*",
 };
 
-/**
- * The core's approval of tools_run: always on (whatever the modes), it reads the efeito and
- * aprovacao of the tool being run from the tools.db files and makes Claude Code ask the user for
- * efeito "externo" (and whenever it cannot tell). It never allows a call by itself.
- */
-export const CORE_RUN_SPEC: HookSpec = {
+/** The core entry: short summary of the active modules at the start of a session. */
+export const CORE_SUMMARY_SPEC: HookSpec = {
   module: ECOSYSTEM_ID,
-  type: "execucao",
-  event: "PreToolUse",
-  matcher: "mcp__.*__tools_run",
+  type: "resumo",
+  event: "SessionStart",
 };
 
 /** Every entry the core installs on its own (once Node.js is found). */
-export const CORE_SPECS: readonly HookSpec[] = [CORE_FAILURE_SPEC, CORE_RUN_SPEC];
+export const CORE_SPECS: readonly HookSpec[] = [CORE_FAILURE_SPEC, CORE_SUMMARY_SPEC];
 
 /** Ids of the modules that have a protection hook. */
 export function protectionModuleIds(): string[] {
@@ -108,7 +114,7 @@ export interface ParsedCommand {
   type: HookType;
 }
 
-const COMMAND_PATTERN = /ai-ecosystem-hook\.mjs"?\s+([a-z0-9][a-z0-9-]*)\s+(protecao|setup|falha|aprovacao|execucao)(?=\s|$)/;
+const COMMAND_PATTERN = /ai-ecosystem-hook\.mjs"?\s+([a-z0-9][a-z0-9-]*)\s+(protecao|setup|falha|aprovacao|execucao|resumo|despacho)(?=\s|$)/;
 
 /** Reads "<module> <type>" from a plugin command. Undefined when the command is not ours. */
 export function parseCommand(command: unknown): ParsedCommand | undefined {

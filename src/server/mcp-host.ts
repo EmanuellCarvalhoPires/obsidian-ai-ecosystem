@@ -51,8 +51,11 @@ export interface McpHostOptions {
   getBaseInstructions: () => string;
   /** True to hide a tool from tools/list (and refuse tools/call) for that kind of client. */
   isToolHidden?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
-  /** Called after every tools/call. Errors thrown here never affect the request. */
-  onToolResult?: (moduleId: string, isError: boolean) => void;
+  /**
+   * Called after every tools/call. failed is true only when the handler threw (a tool answer with
+   * isError is not a failure of the module). Errors thrown here never affect the request.
+   */
+  onToolResult?: (moduleId: string, failed: boolean) => void;
   /** tools/list exposure of a kind of client (default "completo": every tool). */
   getToolExposure?: (clientKind: ClientKind) => ToolExposureMode;
   /**
@@ -60,6 +63,8 @@ export interface McpHostOptions {
    * tools/call keeps accepting every tool by name in both modes.
    */
   isListedWhenIndexed?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
+  /** In "completo" mode, false to leave a tool out of tools/list (tools/call still accepts it by name). */
+  isListedWhenComplete?: (tool: RegisteredTool, clientKind: ClientKind) => boolean;
   /** Appended to the instructions on initialize for a client in "indexado" mode. */
   getIndexedInstructions?: () => string;
 }
@@ -288,7 +293,11 @@ export class McpHost {
         const indexed = this.exposure(kind) === "indexado";
         const visible = this.opts.registry
           .listTools()
-          .filter((registered) => !this.isHidden(registered, kind) && (!indexed || this.isListedWhenIndexed(registered, kind)));
+          .filter(
+            (registered) =>
+              !this.isHidden(registered, kind) &&
+              (indexed ? this.isListedWhenIndexed(registered, kind) : this.isListedWhenComplete(registered, kind)),
+          );
         const tools = visible.map(({ tool }) => {
           const out: Record<string, unknown> = { name: tool.name };
           if (tool.title !== undefined) out.title = tool.title;
@@ -352,9 +361,11 @@ export class McpHost {
     state.aborts.add(controller);
     const ctx: HubCallContext = { client, moduleId: found.moduleId, clientKind: kind, signal: controller.signal };
     let result: HubToolResult;
+    let threw = false;
     try {
       result = await found.tool.handler(rawArgs, ctx);
     } catch (err) {
+      threw = true;
       const message = err instanceof Error ? err.message : String(err);
       result = { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
     } finally {
@@ -362,7 +373,7 @@ export class McpHost {
       state.aborts.delete(controller);
     }
     try {
-      this.opts.onToolResult?.(found.moduleId, result.isError === true);
+      this.opts.onToolResult?.(found.moduleId, threw);
     } catch {
       // The failure marker must never break a request.
     }
@@ -430,6 +441,14 @@ export class McpHost {
   private isListedWhenIndexed(registered: RegisteredTool, kind: ClientKind): boolean {
     try {
       return this.opts.isListedWhenIndexed?.(registered, kind) ?? true;
+    } catch {
+      return true;
+    }
+  }
+
+  private isListedWhenComplete(registered: RegisteredTool, kind: ClientKind): boolean {
+    try {
+      return this.opts.isListedWhenComplete?.(registered, kind) ?? true;
     } catch {
       return true;
     }

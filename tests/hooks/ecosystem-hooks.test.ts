@@ -124,12 +124,31 @@ describe("hooks in the Ecosystem", () => {
 
   it("marks the module on a failed tool call and clears the mark on its next success", async () => {
     const r = await start();
-    r.eco.api.registerModule(module("probe"));
+    r.eco.api.registerModule(
+      module("probe", {
+        tools: [
+          { name: "probe_ok", description: "ok", inputSchema: { type: "object" }, handler: async () => ({ content: [{ type: "text", text: "ok" }] }) },
+          {
+            name: "probe_throw",
+            description: "throws",
+            inputSchema: { type: "object" },
+            handler: async () => {
+              throw new Error("boom");
+            },
+          },
+          { name: "probe_soft", description: "answers with an error", inputSchema: { type: "object" }, handler: async () => ({ content: [{ type: "text", text: "no" }], isError: true }) },
+        ],
+      }),
+    );
 
     await rpc(r, "tools/call", { name: "probe_ok", arguments: {} });
     expect(stateFile(r, "falhas.json")).toBeUndefined();
 
-    await rpc(r, "tools/call", { name: "probe_fail", arguments: {} });
+    // An answer with isError and no exception is not a failure of the module.
+    await rpc(r, "tools/call", { name: "probe_soft", arguments: {} });
+    expect(stateFile(r, "falhas.json")).toBeUndefined();
+
+    await rpc(r, "tools/call", { name: "probe_throw", arguments: {} });
     const marks = stateFile(r, "falhas.json");
     expect(Object.keys(marks)).toEqual(["probe"]);
     expect(Math.abs(Date.now() - marks.probe)).toBeLessThan(5000);

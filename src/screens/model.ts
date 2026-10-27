@@ -6,8 +6,8 @@ export const FIELD_ID_PATTERN = /^[a-z0-9_]{1,40}$/;
 /** Name of the entry a password field creates in Environment Keys. */
 export const SECRET_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 export const SCREEN_TOOL_PREFIX = "tela_";
-/** Slugs that would collide with the infrastructure tools (tela_criar, tela_listar...). */
-export const RESERVED_SLUGS: readonly string[] = ["criar", "listar", "editar", "remover"];
+/** Slugs that would collide with the infrastructure tools (tela_gerenciar, tela_listar...). criar and editar stay reserved for compatibility. */
+export const RESERVED_SLUGS: readonly string[] = ["criar", "editar", "gerenciar", "listar", "remover"];
 /** Key the id of a clicked "acao" button is returned under (valores.acao), so no field may use it as id. */
 export const ACTION_KEY = "acao";
 export const DEFAULT_MAX_SCREENS = 30;

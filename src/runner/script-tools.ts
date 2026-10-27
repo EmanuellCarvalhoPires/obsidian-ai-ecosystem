@@ -2,6 +2,8 @@
 
 import * as fs from "node:fs";
 import * as nodePath from "node:path";
+import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import { ECOSYSTEM_ID, SCRIPT_LANGUAGES } from "../types";
 import type {
   ClientContext,
@@ -18,7 +20,10 @@ import type { ScriptEngine } from "./script-engine";
 
 const MAX_DEPTH = 6;
 const MAX_FILES = 500;
-const AGENT_OUTPUT_CHARS = 20_000;
+const DEFAULT_OUTPUT_CHARS = 4000;
+const MAX_OUTPUT_CHARS = 100_000;
+const SPILL_DIR_NAME = "ai-ecosystem-runs";
+const SPILL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const EXTENSION_LANGUAGE: Record<string, ScriptLanguage> = {
   ".py": "python",
@@ -34,11 +39,22 @@ export interface ListedScript {
   language: ScriptLanguage;
 }
 
+/** The part of the AI Scripts service that script_id needs (its items are checked at runtime). */
+export interface ScriptsLookup {
+  listScripts(): Promise<unknown[]> | unknown[];
+}
+
 export interface ScriptToolsDeps {
   engine: ScriptEngine;
   vaultBasePath: string;
   getSettings: () => ScriptSettings;
   getDeclaredScripts: () => string[];
+  /** The AI Scripts service, looked up on each call. Undefined when AI Scripts is not running. */
+  getScriptsService?: () => ScriptsLookup | undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function inferLanguage(path: string): ScriptLanguage | undefined {
@@ -107,7 +123,53 @@ export async function listAllowedScripts(
   return [...found.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-type ParsedRequest = { ok: true; options: HubScriptOptions } | { ok: false; message: string };
+/**
+ * Turns script_id into the path AI Scripts registered for it. Without a script_id the arguments
+ * pass through unchanged; the engine still decides whether the resolved path may run.
+ */
+async function resolveScriptId(
+  deps: ScriptToolsDeps,
+  raw: unknown,
+): Promise<{ ok: true; args: unknown } | { ok: false; message: string }> {
+  if (!isPlainObject(raw) || typeof raw.script_id !== "string") return { ok: true, args: raw };
+  const scriptId = raw.script_id.trim();
+  if (scriptId === "") return { ok: true, args: raw };
+  if ((raw.path !== undefined && raw.path !== "") || raw.code !== undefined) {
+    return { ok: false, message: "Give path or script_id, not both." };
+  }
+
+  const unavailable = `script_id "${scriptId}": AI Scripts is not available. Pass path (a script file of the vault) instead.`;
+  const service = deps.getScriptsService?.();
+  if (!service || typeof service.listScripts !== "function") return { ok: false, message: unavailable };
+  let items: unknown;
+  try {
+    items = await service.listScripts();
+  } catch {
+    return { ok: false, message: unavailable };
+  }
+
+  const list: unknown[] = Array.isArray(items) ? items : [];
+  const item = list.find((x): x is Record<string, unknown> => isPlainObject(x) && x.scriptId === scriptId);
+  if (!item) {
+    return {
+      ok: false,
+      message: `script_id "${scriptId}" is not registered in AI Scripts. Call list_ai_scripts to see the ids, or pass path.`,
+    };
+  }
+  const scriptPath = item.scriptPath;
+  if (typeof scriptPath !== "string" || scriptPath.trim() === "") {
+    return {
+      ok: false,
+      message: `The script "${scriptId}" is registered in AI Scripts but has no script file here. Run it with run_ai_script {"script_id":"${scriptId}","params":{...}}.`,
+    };
+  }
+
+  const args: Record<string, unknown> = { ...raw, path: scriptPath };
+  delete args.script_id;
+  return { ok: true, args };
+}
+
+type ParsedRequest = { ok: true; options: HubScriptOptions; maxChars: number } | { ok: false; message: string };
 
 /** Turns tool arguments or a REST body into engine options. Shape errors are reported, policy is left to the engine. */
 function parseRunRequest(raw: unknown): ParsedRequest {
@@ -117,6 +179,7 @@ function parseRunRequest(raw: unknown): ParsedRequest {
   const a = raw as Record<string, unknown>;
   if (a.path !== undefined && typeof a.path !== "string") return { ok: false, message: "path must be a string." };
   if (a.code !== undefined && typeof a.code !== "string") return { ok: false, message: "code must be a string." };
+  if (a.script_id !== undefined && typeof a.script_id !== "string") return { ok: false, message: "script_id must be a string." };
   if (a.cwd !== undefined && typeof a.cwd !== "string") return { ok: false, message: "cwd must be a string." };
   if (a.timeoutSeconds !== undefined && (typeof a.timeoutSeconds !== "number" || !Number.isFinite(a.timeoutSeconds))) {
     return { ok: false, message: "timeoutSeconds must be a number." };
@@ -133,10 +196,19 @@ function parseRunRequest(raw: unknown): ParsedRequest {
   if (a.language !== undefined && !SCRIPT_LANGUAGES.includes(a.language as ScriptLanguage)) {
     return { ok: false, message: `language must be one of: ${SCRIPT_LANGUAGES.join(", ")}.` };
   }
+  if (a.max_chars !== undefined && (typeof a.max_chars !== "number" || !Number.isInteger(a.max_chars) || a.max_chars < 1)) {
+    return { ok: false, message: "max_chars must be a positive integer." };
+  }
 
   const path = typeof a.path === "string" ? a.path : "";
   const language = (a.language as ScriptLanguage | undefined) ?? (path ? inferLanguage(path) : undefined);
-  if (a.code === undefined && !path) return { ok: false, message: "path is required (or code with language)." };
+  if (a.code === undefined && !path) {
+    return {
+      ok: false,
+      message:
+        'path is required: a script path of the vault such as "Scripts/report.py" (see ecosystem_list_scripts), a script_id registered in AI Scripts, or code with language.',
+    };
+  }
   if (!language) {
     return {
       ok: false,
@@ -157,22 +229,68 @@ function parseRunRequest(raw: unknown): ParsedRequest {
       timeoutSeconds: a.timeoutSeconds,
       env: a.env as Record<string, string> | undefined,
     },
+    maxChars: Math.min(typeof a.max_chars === "number" ? a.max_chars : DEFAULT_OUTPUT_CHARS, MAX_OUTPUT_CHARS),
   };
 }
 
-function tail(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `[${text.length - max} earlier characters omitted]\n` + text.slice(text.length - max);
+export interface ClippedOutput {
+  text: string;
+  omitted: number;
+  file?: string;
 }
 
-function formatRun(result: ScriptExecutionResult): HubToolResult {
-  const stdout = tail(result.stdout, AGENT_OUTPUT_CHARS);
-  const stderr = tail(result.stderr, AGENT_OUTPUT_CHARS);
+/** Writes the full output to a temp file. Returns its path, or undefined when the write fails. */
+function spillOutput(full: string, stream: "out" | "err"): string | undefined {
+  try {
+    const dir = nodePath.join(os.tmpdir(), SPILL_DIR_NAME);
+    fs.mkdirSync(dir, { recursive: true });
+    const now = Date.now();
+    for (const name of fs.readdirSync(dir)) {
+      try {
+        const old = nodePath.join(dir, name);
+        if (now - fs.statSync(old).mtimeMs > SPILL_MAX_AGE_MS) fs.unlinkSync(old);
+      } catch {
+        // Unreadable or busy file: leave it for a later run.
+      }
+    }
+    const file = nodePath.join(dir, `${Date.now()}-${randomUUID().slice(0, 8)}.${stream}.txt`);
+    fs.writeFileSync(file, full, "utf8");
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Keeps the start and the end of a long output; the full text goes to a file when possible. */
+export function clipOutput(full: string, maxChars: number, stream: "out" | "err"): ClippedOutput {
+  if (full.length <= maxChars) return { text: full, omitted: 0 };
+  const file = spillOutput(full, stream);
+  const head = Math.floor(maxChars / 4);
+  const tailLength = maxChars - head;
+  const omitted = full.length - maxChars;
+  const marker = "\n[... " + omitted + " characters omitted" + (file ? "; full output in " + file : "") + " ...]\n";
+  return {
+    text: full.slice(0, head) + marker + full.slice(full.length - tailLength),
+    omitted,
+    ...(file ? { file } : {}),
+  };
+}
+
+function formatRun(result: ScriptExecutionResult, maxChars: number): HubToolResult {
+  const out = clipOutput(result.stdout, maxChars, "out");
+  const err = clipOutput(result.stderr, maxChars, "err");
   const lines = [`Exit code: ${result.exitCode}`, `Killed: ${result.killed ? "yes (timeout or cancel)" : "no"}`, `Duration: ${result.durationMs} ms`];
-  lines.push("", "stdout:", stdout || "(empty)", "", "stderr:", stderr || "(empty)");
+  lines.push("", "stdout:", out.text || "(empty)", "", "stderr:", err.text || "(empty)");
   return {
     content: [{ type: "text", text: lines.join("\n") }],
-    structuredContent: { exitCode: result.exitCode, killed: result.killed, durationMs: result.durationMs, stdout, stderr },
+    structuredContent: {
+      exitCode: result.exitCode,
+      killed: result.killed,
+      durationMs: result.durationMs,
+      truncated: out.omitted > 0 || err.omitted > 0,
+      ...(out.file ? { stdout_file: out.file } : {}),
+      ...(err.file ? { stderr_file: err.file } : {}),
+    },
     isError: result.exitCode !== 0,
   };
 }
@@ -181,40 +299,48 @@ async function runFromArgs(
   deps: ScriptToolsDeps,
   args: unknown,
   client: ClientContext | undefined,
-): Promise<{ kind: "invalid"; message: string } | { kind: "refused"; code: string; message: string } | { kind: "done"; result: ScriptExecutionResult }> {
-  const parsed = parseRunRequest(args);
+  signal?: AbortSignal,
+): Promise<
+  | { kind: "invalid"; message: string }
+  | { kind: "refused"; code: string; message: string }
+  | { kind: "done"; result: ScriptExecutionResult; maxChars: number }
+> {
+  const resolved = await resolveScriptId(deps, args);
+  if (!resolved.ok) return { kind: "invalid", message: resolved.message };
+  const parsed = parseRunRequest(resolved.args);
   if (!parsed.ok) return { kind: "invalid", message: parsed.message };
   try {
-    const result = await deps.engine.run(parsed.options, { moduleId: ECOSYSTEM_ID, client });
-    return { kind: "done", result };
+    const result = await deps.engine.run({ ...parsed.options, ...(signal ? { signal } : {}) }, { moduleId: ECOSYSTEM_ID, client });
+    return { kind: "done", result, maxChars: parsed.maxChars };
   } catch (err) {
     if (err instanceof ScriptRefusedError) return { kind: "refused", code: err.code, message: err.message };
     throw err;
   }
 }
 
-export function createScriptTools(deps: ScriptToolsDeps): HubTool[] {
-  const list = async (): Promise<{ scripts: ListedScript[]; restrictionsOn: boolean }> => {
-    const settings = deps.getSettings();
-    const scripts = await listAllowedScripts(deps.vaultBasePath, settings.allowedFolders, deps.getDeclaredScripts());
-    return { scripts, restrictionsOn: !settings.restrictionsDisabled };
-  };
+/** The scripts the engine would accept now, with the restriction flag. Shared by the tool and GET /scripts. */
+export async function listScriptsData(deps: ScriptToolsDeps): Promise<{ scripts: ListedScript[]; restrictionsOn: boolean }> {
+  const settings = deps.getSettings();
+  const scripts = await listAllowedScripts(deps.vaultBasePath, settings.allowedFolders, deps.getDeclaredScripts());
+  return { scripts, restrictionsOn: !settings.restrictionsDisabled };
+}
 
+export function createScriptTools(deps: ScriptToolsDeps): HubTool[] {
   const listTool: HubTool = {
     name: "ecosystem_list_scripts",
     title: "List runnable scripts",
     description:
-      "Lists the vault scripts that ecosystem_run_script can run: files in the allowed script folders and scripts declared by #mcp/script notes. Paths are relative to the vault root.",
+      "Lists the vault scripts that ecosystem_run_script can run (one path per line, relative to the vault root; the language comes from the extension). Includes files in the allowed script folders and scripts declared by #mcp/script notes.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { title: "List runnable scripts", readOnlyHint: true, openWorldHint: false },
     handler: async () => {
-      const { scripts, restrictionsOn } = await list();
+      const { scripts, restrictionsOn } = await listScriptsData(deps);
       const text = scripts.length
-        ? scripts.map((s) => `${s.path} (${s.language})`).join("\n")
+        ? scripts.map((s) => s.path).join("\n")
         : "No scripts are available. Add a folder under Settings > AI Ecosystem > Scripts > Allowed folders.";
       return {
         content: [{ type: "text", text }],
-        structuredContent: { scripts, restrictionsOn },
+        structuredContent: { scripts: scripts.map((s) => s.path), restrictionsOn },
       };
     },
   };
@@ -223,25 +349,30 @@ export function createScriptTools(deps: ScriptToolsDeps): HubTool[] {
     name: "ecosystem_run_script",
     title: "Run a vault script",
     description:
-      "Runs a script stored in the vault (Python, Node.js, Bash or PowerShell) and returns its exit code, stdout and stderr. " +
-      "Only scripts in the allowed script folders or declared by #mcp/script notes can run (see ecosystem_list_scripts). " +
-      "Inline code (the code argument) works only when the user has turned off the Script Engine restrictions; otherwise it is refused. " +
-      "Environment values may use {{secret:NAME}} placeholders: they are resolved by Environment Keys directly into the process and never returned. " +
-      "The process is killed when the timeout expires.",
+      "Runs a vault script (Python, Node.js, Bash or PowerShell) and returns its exit code, stdout and stderr. Pass a path from ecosystem_list_scripts, or a script_id registered in AI Scripts.",
     inputSchema: {
       type: "object",
       properties: {
         path: {
           type: "string",
-          description: "Script path relative to the vault root, e.g. \"Scripts/report.py\". Required unless code is given.",
+          description: "Script path relative to the vault root, e.g. \"Scripts/report.py\". Required unless script_id or code is given.",
+        },
+        script_id: {
+          type: "string",
+          description: "Id of a script registered in AI Scripts that is a script file; resolved to its path. Alternative to path.",
         },
         args: { type: "array", items: { type: "string" }, description: "Command-line arguments passed to the script." },
         cwd: { type: "string", description: "Working directory relative to the vault root. Default: the vault root." },
-        timeoutSeconds: { type: "number", minimum: 1, description: "Timeout in seconds. Capped by the maximum in the settings." },
+        timeoutSeconds: {
+          type: "number",
+          minimum: 1,
+          description: "Timeout in seconds, capped by the maximum in the settings. The process is killed when it expires.",
+        },
         env: {
           type: "object",
           additionalProperties: { type: "string" },
-          description: "Extra environment variables. Values may be {{secret:NAME}} placeholders.",
+          description:
+            "Extra environment variables. Values may be {{secret:NAME}} placeholders, resolved by Environment Keys straight into the process and never returned.",
         },
         language: {
           type: "string",
@@ -250,25 +381,38 @@ export function createScriptTools(deps: ScriptToolsDeps): HubTool[] {
         },
         code: {
           type: "string",
-          description: "Inline source code to run instead of a file. Only works when the Script Engine restrictions are turned off.",
+          description: "Inline source code to run instead of a file. Refused unless the user turned off the Script Engine restrictions.",
+        },
+        max_chars: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100000,
+          description: "Max characters of stdout and of stderr returned (default 4000; the start and the end are kept and the full output is saved to a file).",
         },
       },
       additionalProperties: false,
     },
     annotations: { title: "Run a vault script", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     handler: async (args, ctx) => {
-      const outcome = await runFromArgs(deps, args, ctx.client);
+      const outcome = await runFromArgs(deps, args, ctx.client, ctx.signal);
       if (outcome.kind === "invalid") {
         return { content: [{ type: "text", text: `Invalid arguments: ${outcome.message}` }], isError: true };
       }
       if (outcome.kind === "refused") {
         return {
-          content: [{ type: "text", text: `Script refused (${outcome.code}): ${outcome.message}` }],
+          content: [
+            {
+              type: "text",
+              text:
+                `Script refused (${outcome.code}): ${outcome.message} ` +
+                "Only scripts in the allowed script folders or declared by #mcp/script notes can run (see ecosystem_list_scripts); inline code needs the Script Engine restrictions turned off.",
+            },
+          ],
           structuredContent: { refused: outcome.code, reason: outcome.message },
           isError: true,
         };
       }
-      return formatRun(outcome.result);
+      return formatRun(outcome.result, outcome.maxChars);
     },
   };
 
@@ -276,21 +420,22 @@ export function createScriptTools(deps: ScriptToolsDeps): HubTool[] {
 }
 
 export function createScriptRoutes(deps: ScriptToolsDeps): HubRoute[] {
-  const listTools = createScriptTools(deps)[0];
   return [
     {
       method: "GET",
       path: "/scripts",
       description: "Lists the scripts that can run.",
-      handler: async (req) => {
-        const res = await listTools.handler({}, { client: req.client, moduleId: ECOSYSTEM_ID });
-        return { status: 200, body: res.structuredContent };
+      handler: async () => {
+        const body = await listScriptsData(deps);
+        return { status: 200, body };
       },
     },
     {
       method: "POST",
       path: "/scripts/run",
-      description: "Runs a script. Body: { path, args?, cwd?, timeoutSeconds?, env?, language?, code? }.",
+      description:
+        "Runs a script. Body: { path, args?, cwd?, timeoutSeconds?, env?, language?, code?, max_chars? }. " +
+        "stdout and stderr are cut to max_chars (default 4000); the full output goes to a file.",
       handler: async (req) => {
         const outcome = await runFromArgs(deps, req.body, req.client);
         if (outcome.kind === "invalid") {
@@ -300,7 +445,21 @@ export function createScriptRoutes(deps: ScriptToolsDeps): HubRoute[] {
           return { status: 403, body: { error: { code: outcome.code, message: outcome.message } } };
         }
         const { exitCode, stdout, stderr, durationMs, killed } = outcome.result;
-        return { status: 200, body: { exitCode, killed, durationMs, stdout, stderr } };
+        const out = clipOutput(stdout, outcome.maxChars, "out");
+        const err = clipOutput(stderr, outcome.maxChars, "err");
+        return {
+          status: 200,
+          body: {
+            exitCode,
+            killed,
+            durationMs,
+            stdout: out.text,
+            stderr: err.text,
+            truncated: out.omitted > 0 || err.omitted > 0,
+            ...(out.file ? { stdout_file: out.file } : {}),
+            ...(err.file ? { stderr_file: err.file } : {}),
+          },
+        };
       },
     },
   ];

@@ -13,6 +13,11 @@ export interface PluginManifestLike {
 
 export type LatestRelease = { version: string; manifest: PluginManifestLike } | { error: string };
 
+/** The version declared in the release manifest (what the catalog shows), not the tag used to download it. */
+export function latestVersionOf(release: LatestRelease | undefined): string | undefined {
+  return release && "manifest" in release ? release.manifest.version : undefined;
+}
+
 export type InstallResult =
   | { ok: true; method: "internal" | "fallback" }
   | { ok: false; method: "store-page"; error: string };

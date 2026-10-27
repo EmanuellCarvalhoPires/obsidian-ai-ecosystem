@@ -68,11 +68,13 @@ export interface SetupStatus {
   node_disponivel: boolean;
   detectado: { nucleo: CoreDetection; modulo: Record<string, unknown> };
   respostas: Record<string, unknown>;
-  perguntas: QuestionView[];
+  perguntas?: QuestionView[];
   pre_requisitos: PrerequisiteView[];
   claude_md: { existe: boolean; caminho: string; tem_bloco: boolean; permissao?: string };
-  bloco_claude_md: string;
+  bloco_claude_md?: string;
   tools_do_modulo: Array<{ nome: string; visivel_para_claude_code: boolean }>;
+  /** Says what was left out of the answer and how to get it. Only there when something was left out. */
+  nota?: string;
 }
 
 export interface SetupFailure {
@@ -205,6 +207,8 @@ export class SetupManager implements HookManagerListener {
   beginCatalogInstall(moduleId: string, name: string): void {
     this.hooks.state.ensure();
     this.states.reset(moduleId, { origem: "catalogo", estado: "pendente_configuracao", nome: name });
+    // The core's setup tools come back to tools/list right away: a pending module counts (HookManager.isSetupPending) even before it registers.
+    this.deps.notifyToolsChanged();
   }
 
   /** The installer finished. On success the skill, the setup hook and GEMINI.md follow; on failure nothing is left behind. */
@@ -305,11 +309,13 @@ export class SetupManager implements HookManagerListener {
 
   // ---- ecosystem_setup_status ----------------------------------------------------------
 
-  async status(moduleId: string): Promise<SetupResult<{ status: SetupStatus }>> {
+  async status(moduleId: string, options: { completo?: boolean } = {}): Promise<SetupResult<{ status: SetupStatus }>> {
     const state = this.states.get(moduleId);
     const info = this.deps.listModules().find((m) => m.id === moduleId);
     if (!state) return { ok: false, error: `Unknown module "${moduleId}". Call ecosystem_status to see the installed modules.` };
 
+    // A configured module only needs its questions and usage block when the user wants to change its answers.
+    const compact = state.estado === "configurado" && options.completo !== true;
     const core = await this.detectCore();
     const handlerData = await this.handlerDetect(this.setupHandler(moduleId));
     const lang = this.deps.language();
@@ -326,12 +332,6 @@ export class SetupManager implements HookManagerListener {
       node_disponivel: (await this.hooks.nodeStatus()).available,
       detectado: { nucleo: core, modulo: handlerData },
       respostas: state.respostas,
-      perguntas: buildQuestions(
-        moduleId,
-        { core, module: handlerData, allowedScriptFolders: [...this.deps.getSettings().scripts.allowedFolders] },
-        state.respostas,
-        lang,
-      ),
       pre_requisitos: this.prerequisites(moduleId),
       claude_md: {
         existe: claudeText !== undefined,
@@ -339,12 +339,22 @@ export class SetupManager implements HookManagerListener {
         tem_bloco: claudeText !== undefined && hasBlock(claudeText),
         ...(typeof permission === "string" ? { permissao: permission } : {}),
       },
-      bloco_claude_md: buildGuideBlock({ lang, modules: this.installedModuleIds(), target: "claude" }),
       tools_do_modulo: this.deps
         .listTools()
         .filter((t) => t.moduleId === moduleId)
         .map((t) => ({ nome: t.tool.name, visivel_para_claude_code: !this.hooks.isToolHidden(t, "claude-code") })),
     };
+    if (compact) {
+      status.nota = "perguntas and bloco_claude_md are left out: the module is already configured. Pass completo: true to get them.";
+    } else {
+      status.perguntas = buildQuestions(
+        moduleId,
+        { core, module: handlerData, allowedScriptFolders: [...this.deps.getSettings().scripts.allowedFolders] },
+        state.respostas,
+        lang,
+      );
+      status.bloco_claude_md = buildGuideBlock({ lang, modules: this.installedModuleIds(), target: "claude" });
+    }
     return { ok: true, status };
   }
 
