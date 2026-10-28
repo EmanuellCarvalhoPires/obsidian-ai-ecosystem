@@ -141,7 +141,7 @@ describe("hook script: environment-variables (curl and friends)", () => {
   it("blocks curl to a host that has a secret and points to the vault tools", () => {
     const run = world.tool(ENV_KEYS, "Bash", { command: 'curl -s -H "Authorization: Bearer x" https://acme.atlassian.net/rest/api/3/myself' });
     expect(run.decision).toBe("deny");
-    expect(run.reason).toContain("search_vault_tools");
+    expect(run.reason).toContain("tools_find");
   });
 
   it("allows curl to a host that is not listed", () => {

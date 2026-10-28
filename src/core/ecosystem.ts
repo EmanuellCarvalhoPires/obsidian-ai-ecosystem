@@ -31,15 +31,20 @@ import {
   DISCOVERY_TOOL_NAMES,
   ECOSYSTEM_ID,
   HOOKS_SERVICE,
+  MCP_PACKAGES_SERVICE,
   SCRIPTS_SERVICE,
   SECRETS_SERVICE,
   SUPPORTED_API_VERSIONS,
+  toolRunnerServiceName,
 } from "../types";
 import type {
   AIEcosystemAPI,
   AIEcosystemSettings,
   ClientKind,
   ClientRecord,
+  IndexedToolRunner,
+  McpPackagesHost,
+  McpPackagesService,
   RegisteredTool,
   RegistryChange,
   SecretVaultService,
@@ -75,6 +80,8 @@ export interface EcosystemDeps {
   language?: () => Lang;
   /** Script folders were added to the allowed list by the guided setup (Obsidian shows a notice). */
   onScriptFoldersAdded?: (folders: string[]) => void;
+  /** Automatically connects the selected AI clients (Claude Code, Antigravity, Codex, Cursor) via MCP. */
+  connectAgents?: (agents: string[]) => Promise<void>;
   /** Tests: how long a module's setup handler may take (default 5000). */
   setupHandlerTimeoutMs?: number;
   /** Saves data.json (the guided setup changes the allowed script folders). */
@@ -89,6 +96,8 @@ export interface EcosystemDeps {
   screenHost?: ScreenHost;
   /** Folder of the saved screens. Default: <vault>/<configDir>/plugins/ai-ecosystem/telas (needs configDir). */
   screensDir?: string;
+  /** The installed MCP packages: their tools are indexed in the core's tools.db and run through Environment Keys. */
+  mcpPackages?: McpPackagesHost;
 }
 
 export class Ecosystem {
@@ -179,6 +188,7 @@ export class Ecosystem {
         handlerTimeoutMs: deps.setupHandlerTimeoutMs,
         activity: this.logger,
         onScriptFoldersAdded: deps.onScriptFoldersAdded,
+        connectAgents: deps.connectAgents,
         notifyToolsChanged: () => this.server.notifyListChanged("tools"),
       });
       this.hooks.setListener(this.setup);
@@ -284,6 +294,27 @@ export class Ecosystem {
     };
     const registered = this.registry.register(createBuiltinModule(this.builtin));
     if (!registered.ok) console.error(`[AI Ecosystem] Could not register the built-in module: ${registered.reason}`);
+
+    const mp = deps.mcpPackages;
+    if (mp) {
+      const packages: McpPackagesService = { list: () => mp.list(), onChange: (listener) => mp.onChange(listener) };
+      this.bus.register(MCP_PACKAGES_SERVICE, ECOSYSTEM_ID, packages);
+      // The package tools are run by Environment Keys, which owns the package notes' secrets.
+      const runner: IndexedToolRunner = {
+        run: async (id, args, ctx) => {
+          const target = this.bus.get<IndexedToolRunner>(toolRunnerServiceName("environment-variables"));
+          if (!target || typeof target.run !== "function") {
+            return {
+              content: [{ type: "text", text: "This tool needs the Environment Keys plugin, which is not active. Enable it and try again." }],
+              isError: true,
+            };
+          }
+          return target.run(id, args, { ...ctx, moduleId: "environment-variables" });
+        },
+      };
+      this.bus.register(toolRunnerServiceName(ECOSYSTEM_ID), ECOSYSTEM_ID, runner);
+      mp.onChange(() => this.syncCoreIndex());
+    }
     this.syncCoreIndex();
   }
 
@@ -324,7 +355,11 @@ export class Ecosystem {
         .listTools()
         .filter((t) => t.moduleId === ECOSYSTEM_ID && !DISCOVERY_TOOL_NAMES.includes(t.tool.name))
         .map((t) => toIndexEntry(t.tool));
-      new ToolIndexWriter(this.coreIndexFile).sync(ECOSYSTEM_ID, entries);
+      // The MCP package tools come after the native ones; a name already taken by a native tool is dropped.
+      const nativeNames = new Set(entries.map((e) => e.name));
+      const packageEntries = (this.deps.mcpPackages?.indexEntries() ?? []).filter((e) => !nativeNames.has(e.name));
+      // One sync for both: it removes the rows that are not in the list.
+      new ToolIndexWriter(this.coreIndexFile).sync(ECOSYSTEM_ID, [...entries, ...packageEntries]);
       this.toolIndex.invalidate();
     } catch (err) {
       console.warn("[AI Ecosystem] Could not write the tool index of the core", err);

@@ -50,6 +50,8 @@ export interface SetupManagerDeps {
   activity?: ActivitySink;
   /** Script folders were added to the Script Engine allowed list (Obsidian shows a notice). */
   onScriptFoldersAdded?: (folders: string[]) => void;
+  /** Automatically connects the selected AI clients (Claude Code, Antigravity, Codex, Cursor) via MCP. */
+  connectAgents?: (agents: string[]) => Promise<void>;
   /** How long a module's detect() or validate() may take before it is given up on. Default 5000. */
   handlerTimeoutMs?: number;
 }
@@ -449,6 +451,9 @@ export class SetupManager implements HookManagerListener {
         case "agentes": {
           const list = stringList(value);
           if (!list || list.length === 0) return "agentes must be a non-empty list of names.";
+          if (this.deps.connectAgents) {
+            await this.deps.connectAgents(list);
+          }
           return undefined;
         }
         case "arquivo_settings": {

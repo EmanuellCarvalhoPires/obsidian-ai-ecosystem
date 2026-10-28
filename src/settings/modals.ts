@@ -8,16 +8,16 @@ import { t } from "../i18n";
 export const MCP_SERVER_NAME = "ai-ecosystem";
 
 /** Command that registers the server in Claude Code. */
-export function buildClaudeCommand(url: string, token: string): string {
-  return `claude mcp add --transport http ${MCP_SERVER_NAME} ${url} --header "Authorization: Bearer ${token}"`;
+export function buildClaudeCommand(url: string, token: string, serverName = MCP_SERVER_NAME): string {
+  return `claude mcp add --transport http ${serverName} ${url} --header "Authorization: Bearer ${token}"`;
 }
 
 /** JSON block for clients configured by file (Antigravity and others). */
-export function buildJsonConfig(url: string, token: string): string {
+export function buildJsonConfig(url: string, token: string, serverName = MCP_SERVER_NAME): string {
   return JSON.stringify(
     {
       mcpServers: {
-        [MCP_SERVER_NAME]: {
+        [serverName]: {
           type: "http",
           url,
           headers: { Authorization: `Bearer ${token}` },
@@ -157,6 +157,7 @@ export interface NewClientOptions {
   /** The plain token. Shown once, never stored or logged. */
   token: string;
   url: string;
+  serverName?: string;
 }
 
 export class NewClientModal extends Modal {
@@ -184,8 +185,9 @@ export class NewClientModal extends Modal {
           .onClick(() => void copyToClipboard(options.token, t("settings.newClient.tokenCopied"))),
       );
 
-    this.addSnippet(t("settings.newClient.claude"), buildClaudeCommand(options.url, options.token), "claude");
-    this.addSnippet(t("settings.newClient.json"), buildJsonConfig(options.url, options.token), "json");
+    const serverName = options.serverName ?? MCP_SERVER_NAME;
+    this.addSnippet(t("settings.newClient.claude"), buildClaudeCommand(options.url, options.token, serverName), "claude");
+    this.addSnippet(t("settings.newClient.json"), buildJsonConfig(options.url, options.token, serverName), "json");
 
     new Setting(contentEl).addButton((btn) => btn.setButtonText(t("settings.newClient.done")).setCta().onClick(() => this.close()));
   }

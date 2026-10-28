@@ -73,6 +73,7 @@ function agentHints(clients: string[]): string[] {
     if (/claude/i.test(name)) out.add("claude-code");
     if (/antigravity|gemini/i.test(name)) out.add("antigravity");
     if (/codex/i.test(name)) out.add("codex");
+    if (/cursor/i.test(name)) out.add("cursor");
   }
   return [...out];
 }
@@ -125,6 +126,7 @@ function coreQuestions(ctx: QuestionContext): Question[] {
         { valor: "claude-code", rotulo: { pt: "Claude Code", en: "Claude Code" } },
         { valor: "antigravity", rotulo: { pt: "Antigravity", en: "Antigravity" } },
         { valor: "codex", rotulo: { pt: "Codex", en: "Codex" } },
+        { valor: "cursor", rotulo: { pt: "Cursor", en: "Cursor" } },
       ],
       salvar: true,
       sugestao: agentHints(ctx.core.clientes),

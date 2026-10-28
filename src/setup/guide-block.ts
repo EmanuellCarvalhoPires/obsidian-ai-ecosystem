@@ -146,7 +146,7 @@ const GUIDES: ModuleGuide[] = [
       {
         task: { pt: "Chamar uma API autenticada ou usar um segredo", en: "Call an authenticated API or use a secret" },
         plugin: "Environment Keys",
-        tools: ["search_vault_tools", "run_vault_tool", "list_vault_tools", "list_secrets", "http_request"],
+        tools: ["tools_find", "tools_run", "list_secrets", "http_request"],
       },
       {
         task: { pt: "Criar uma secret nova (o usuário digita o valor)", en: "Create a new secret (the user types the value)" },
@@ -155,8 +155,8 @@ const GUIDES: ModuleGuide[] = [
       },
     ],
     advice: {
-      pt: "Para chamar um serviço que tem secret, use `search_vault_tools` e `run_vault_tool` (ou `http_request` com `{{secret:NOME}}`) em vez de `curl`, `wget` ou `Invoke-RestMethod` contra esse host. Nunca peça nem escreva o valor de uma secret.",
-      en: "To call a service that has a secret, use `search_vault_tools` and `run_vault_tool` (or `http_request` with `{{secret:NAME}}`) instead of `curl`, `wget` or `Invoke-RestMethod` against that host. Never ask for or write the value of a secret.",
+      pt: "Para chamar um serviço que tem secret, use `tools_find` e `tools_run` (ou `http_request` com `{{secret:NOME}}`) em vez de `curl`, `wget` ou `Invoke-RestMethod` contra esse host. Nunca peça nem escreva o valor de uma secret.",
+      en: "To call a service that has a secret, use `tools_find` and `tools_run` (or `http_request` with `{{secret:NAME}}`) instead of `curl`, `wget` or `Invoke-RestMethod` against that host. Never ask for or write the value of a secret.",
     },
   },
   {

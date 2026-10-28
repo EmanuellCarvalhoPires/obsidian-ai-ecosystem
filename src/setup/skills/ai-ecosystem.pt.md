@@ -13,7 +13,7 @@ Esta é a primeira rodada de qualquer instalação: os módulos só concluem a c
 
 Nesta ordem, em uma rodada de até quatro perguntas (as de `perguntas` que ainda faltam):
 
-1. `agentes` (várias escolhas): quais agentes de IA o usuário usa com este cofre. Opções: Claude Code, Antigravity, Codex. Quem usa outro escolhe "Other". O valor gravado é a lista dos nomes em minúsculas, com os de "Other" como foram escritos. Se `detectado.nucleo.clientes` já mostra clientes cadastrados, use-os como dica para a recomendação.
+1. `agentes` (várias escolhas): quais agentes de IA o usuário usa com este cofre. Opções: Claude Code, Antigravity, Codex, Cursor. Quem usa outro escolhe "Other". O valor gravado é a lista dos nomes em minúsculas, com os de "Other" como foram escritos. Se `detectado.nucleo.clientes` já mostra clientes cadastrados, use-os como dica para a recomendação. Ao salvar a resposta, o AI Ecosystem conecta automaticamente os clientes de IA selecionados ao servidor MCP local deste cofre.
 2. `arquivo_settings` (uma escolha): onde gravar as entradas dos hooks. A pergunta é se o cofre é sincronizado ou está em git e se as entradas devem ir junto. Veja em `detectado.nucleo.git` e `detectado.nucleo.sincronizacao` o que o plugin achou e diga isso na pergunta.
    - `settings.local.json` (Recomendado): só nesta máquina, fora do git e da sincronização.
    - `settings.json`: compartilhado. Só quando o usuário quer os hooks no git para uma equipe. Os comandos levam o caminho deste cofre e o plugin reescreve o caminho em cada máquina quando roda, então cada pessoa precisa do AI Ecosystem instalado.

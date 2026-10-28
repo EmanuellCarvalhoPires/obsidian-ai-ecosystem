@@ -13,7 +13,7 @@ This is the first round of any install: the modules only finish their setup afte
 
 In this order, in one round of up to four questions (the ones in `perguntas` that are still missing):
 
-1. `agentes` (multiple choice): which AI agents the user uses with this vault. Options: Claude Code, Antigravity, Codex. Anyone using another picks "Other". The saved value is the list of names in lowercase, with the "Other" ones as typed. If `detectado.nucleo.clientes` already shows registered clients, use them as a hint for the recommendation.
+1. `agentes` (multiple choice): which AI agents the user uses with this vault. Options: Claude Code, Antigravity, Codex, Cursor. Anyone using another picks "Other". The saved value is the list of names in lowercase, with the "Other" ones as typed. If `detectado.nucleo.clientes` already shows registered clients, use them as a hint for the recommendation. Upon saving the answer, AI Ecosystem automatically connects the selected AI clients to this vault's local MCP server.
 2. `arquivo_settings` (single choice): where to write the hook entries. The question is whether the vault is synced or in git and whether the entries should travel with it. Look at `detectado.nucleo.git` and `detectado.nucleo.sincronizacao` for what the plugin found and say so in the question.
    - `settings.local.json` (Recommended): this machine only, outside git and sync.
    - `settings.json`: shared. Only when the user wants the hooks in git for a team. The commands carry this vault's path and the plugin rewrites the path on each machine when it runs, so everyone needs AI Ecosystem installed.

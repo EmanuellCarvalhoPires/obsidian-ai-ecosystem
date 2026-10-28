@@ -1,9 +1,12 @@
 // Loads and normalizes data.json. Never throws: garbage in, defaults out.
+import { INTEGRATION_IDS } from "../clients/integrations";
+import { SERVER_NAME_PATTERN } from "../clients/vault-identity";
 import { DEFAULT_SETTINGS, LEGACY_FIXED_TOOLS, SCRIPT_LANGUAGES } from "../types";
 import type {
   AIEcosystemSettings,
   ClientKind,
   ClientRecord,
+  IntegrationId,
   ScriptLanguage,
   ScriptSettings,
   ToolExposureMode,
@@ -88,6 +91,9 @@ function normalizeClients(value: unknown): ClientRecord[] {
     if (lastUsedAt) record.lastUsedAt = lastUsedAt;
     const importedFrom = nonEmptyString(raw.importedFrom);
     if (importedFrom) record.importedFrom = importedFrom;
+    if (typeof raw.integration === "string" && (INTEGRATION_IDS as readonly string[]).includes(raw.integration)) {
+      record.integration = raw.integration as IntegrationId;
+    }
     ids.add(id);
     hashes.add(hash);
     out.push(record);
@@ -175,6 +181,9 @@ export function normalizeSettings(raw: unknown): AIEcosystemSettings {
     toolExposure: normalizeExposure(data.toolExposure),
   };
   if (isValidPort(data.lastPort)) settings.lastPort = data.lastPort;
+  if (typeof data.mcpServerName === "string" && SERVER_NAME_PATTERN.test(data.mcpServerName.trim())) {
+    settings.mcpServerName = data.mcpServerName.trim();
+  }
   return settings;
 }
 

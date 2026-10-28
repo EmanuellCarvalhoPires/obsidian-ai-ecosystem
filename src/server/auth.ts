@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { ClientContext, ClientRecord } from "../types";
+import { INTEGRATION_IDS } from "../clients/integrations";
+import type { ClientContext, ClientRecord, IntegrationId } from "../types";
 
 export const TOKEN_PREFIX = "aie_";
 
@@ -16,7 +17,7 @@ export function hashToken(token: string): string {
 }
 
 /** Creates a client record; the token is returned once and only its hash is kept. */
-export function createClient(name: string): { record: ClientRecord; token: string } {
+export function createClient(name: string, integration?: IntegrationId): { record: ClientRecord; token: string } {
   const token = generateToken();
   const record: ClientRecord = {
     id: randomBytes(8).toString("hex"),
@@ -24,6 +25,7 @@ export function createClient(name: string): { record: ClientRecord; token: strin
     tokenHash: hashToken(token),
     hint: token.slice(0, 10),
     createdAt: new Date().toISOString(),
+    ...(integration ? { integration } : {}),
   };
   return { record, token };
 }
@@ -89,6 +91,9 @@ export function mergeImportedClients(
       importedFrom: sourceModuleId,
     };
     if (typeof entry.lastUsedAt === "string") record.lastUsedAt = entry.lastUsedAt;
+    if (entry.integration && (INTEGRATION_IDS as readonly string[]).includes(entry.integration)) {
+      record.integration = entry.integration;
+    }
     clients.push(record);
     ids.add(record.id);
     hashes.add(record.tokenHash);

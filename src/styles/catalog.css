@@ -106,3 +106,139 @@
     transform: rotate(360deg);
   }
 }
+
+/* AI Clients Section in Catalog View */
+.aie-catalog-clients-box {
+  margin-top: var(--size-4-6);
+  padding-top: var(--size-4-4);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* MCP packages section. */
+.aie-mcp-divider {
+  border-top: 1px solid var(--background-modifier-border);
+  margin: var(--size-4-6) 0 var(--size-4-4);
+}
+.aie-mcp-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-4);
+}
+.aie-mcp-app {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  margin-bottom: var(--size-4-4);
+}
+.aie-mcp-app-title {
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+  margin: 0 0 var(--size-4-2) 0;
+  padding-bottom: var(--size-4-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.aie-mcp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: var(--size-4-3);
+}
+.aie-mcp-card,
+.aie-mcp-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.aie-mcp-card:hover,
+.aie-mcp-row:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+.aie-mcp-card-head,
+.aie-mcp-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+}
+.aie-mcp-card-info {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  min-width: 0;
+  flex: 1;
+}
+.aie-mcp-card-titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.aie-mcp-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-s);
+  flex-shrink: 0;
+}
+.aie-mcp-logo-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+}
+.aie-mcp-name {
+  font-weight: var(--font-semibold);
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aie-mcp-meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.aie-mcp-card-actions,
+.aie-mcp-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  flex-shrink: 0;
+}
+.aie-mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding-top: var(--size-4-2);
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.aie-mcp-progress {
+  height: 4px;
+  width: 100%;
+  background: var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.aie-mcp-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--interactive-accent);
+}
+.aie-mcp-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.aie-mcp-status-error {
+  color: var(--text-error);
+}
+.aie-mcp-badge {
+  color: var(--text-success);
+  font-size: var(--font-ui-small);
+}
