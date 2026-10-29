@@ -109,6 +109,30 @@ describe("setup skills", () => {
     expect(pt).toContain("o plugin nunca grava no `CLAUDE.md`");
   });
 
+  it("the core skill offers to update or recreate an existing CLAUDE.md, confirms the creation, maps the folders and suggests module folders", () => {
+    for (const lang of LANGS) {
+      const text = buildSkill("ai-ecosystem", "AI Ecosystem", lang);
+      const pt = lang === "pt";
+      // Existing file: update it or start from scratch.
+      expect(text).toContain(pt ? "**Atualizar o existente**" : "**Update the existing one**");
+      expect(text).toContain(pt ? "**Criar do zero**" : "**Start from scratch**");
+      // Starting from scratch never deletes: the old file is copied to a backup first.
+      expect(text).toContain(pt ? "CLAUDE.backup-AAAA-MM-DD.md" : "CLAUDE.backup-YYYY-MM-DD.md");
+      expect(text).toContain(pt ? "**não o apague nem o mova**" : "**do not delete or move it**");
+      // The creation is confirmed with the draft before anything is written.
+      expect(text).toContain(pt ? "**Confirme a criação**" : "**Confirm the creation**");
+      expect(text).toContain(pt ? "Criar o CLAUDE.md" : "Create the CLAUDE.md");
+      // The folder map goes into the file; the module folders are only suggested.
+      expect(text).toContain(pt ? "## Mapa de pastas do cofre" : "## Vault folder map");
+      expect(text).toContain(pt ? "## Mapa do cofre" : "## Vault map");
+      expect(text).toContain("list_folders");
+      expect(text).toContain(pt ? "## Estrutura de pastas para os módulos" : "## Folder structure for the modules");
+      expect(text).toContain(pt ? "**sugira a criação**" : "**suggest creating**");
+      expect(text).toContain(pt ? "Nada é criado sem a aprovação do usuário." : "Nothing is created without the user's approval.");
+      for (const folder of ["Templates/AI/", "Scripts/AI/", "Knowledge/Logs/", "Projetos/"]) expect(text).toContain(folder);
+    }
+  });
+
   it("the Environment Keys skill creates the secrets through the screen and never offers full access", () => {
     for (const lang of LANGS) {
       const text = buildSkill("environment-variables", "Environment Keys", lang);
