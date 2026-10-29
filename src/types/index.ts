@@ -782,6 +782,7 @@ export interface InstalledMcpPackage {
   serviceTag?: string;
   groupId?: string;
   toolCount: number;
+  requestCount?: number;
   /** Vault-relative path of the .db file. */
   dbPath: string;
 }

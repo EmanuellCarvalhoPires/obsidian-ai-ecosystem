@@ -9,12 +9,12 @@ import type {
   McpCatalog,
   McpCatalogEntry,
   McpCatalogGroup,
-  McpPackageFile,
   McpPackageManifest,
 } from "../mcp-packages/catalog";
 import { defaultLogoFor } from "../mcp-packages/default-logos";
 import type { McpPackageService } from "../mcp-packages/package-service";
 import { McpDeleteModal } from "./mcp-delete-modal";
+import { McpPackageToolsModal } from "./mcp-package-tools-modal";
 
 export interface McpPackagesSectionDeps {
   app: App;
@@ -36,8 +36,20 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function toolKey(entry: McpCatalogEntry, file: McpPackageFile): string {
-  return `tool:${entry.id}:${file.path}`;
+
+export function formatGroupCounts(group: { toolCount: number; requestOnlyCount?: number; requestCount?: number }): string {
+  const parts: string[] = [];
+  if (group.toolCount > 0) {
+    parts.push(t("catalog.mcp.toolCount", { n: group.toolCount }));
+  }
+  const requests = group.requestOnlyCount || group.requestCount;
+  if (requests && requests > 0 && (group.toolCount === 0 || (group.requestOnlyCount && group.requestOnlyCount > 0))) {
+    parts.push(t("catalog.mcp.requestCount", { n: group.toolCount === 0 ? requests : group.requestOnlyCount! }));
+  }
+  if (parts.length === 0) {
+    return t("catalog.mcp.toolCount", { n: 0 });
+  }
+  return parts.join(" · ");
 }
 
 export class McpPackagesSection {
@@ -52,18 +64,19 @@ export class McpPackagesSection {
   private catalog: McpCatalog | undefined;
   private error: string | undefined;
   private loading = true;
-  private readonly expanded = new Set<string>();
-  private readonly toolsLoading = new Set<string>();
-  private readonly toolsErrors = new Map<string, string>();
   /** Manifests by entry id, filled on demand. */
   private readonly manifests = new Map<string, McpPackageManifest>();
   private readonly tasks = new Map<string, TaskState>();
+  private unsubscribeService: (() => void) | undefined;
 
   constructor(private readonly deps: McpPackagesSectionDeps) {}
 
   /** Draws the section into the container. The first call starts loading the catalog. */
   mount(container: HTMLElement): void {
     this.container = container;
+    if (!this.unsubscribeService) {
+      this.unsubscribeService = this.deps.service.onChange(() => this.draw());
+    }
     if (this.started) {
       this.draw();
       return;
@@ -74,6 +87,8 @@ export class McpPackagesSection {
 
   dispose(): void {
     this.token++;
+    this.unsubscribeService?.();
+    this.unsubscribeService = undefined;
     this.container = undefined;
     this.clearNodes();
   }
@@ -156,7 +171,6 @@ export class McpPackagesSection {
 
   private renderGroup(parent: HTMLElement, group: McpCatalogGroup): void {
     const task = this.task(group.id);
-    const expanded = this.expanded.has(group.id);
     const installed = group.entries.every((entry) => this.deps.service.isInstalled(entry.id));
 
     const row = parent.createDiv({ cls: "aie-mcp-card" });
@@ -169,15 +183,17 @@ export class McpPackagesSection {
 
     const titles = info.createDiv({ cls: "aie-mcp-card-titles" });
     titles.createSpan({ cls: "aie-mcp-name", text: group.name });
-    titles.createSpan({ cls: "aie-mcp-meta", text: t("catalog.mcp.toolCount", { n: group.toolCount }) });
+    titles.createSpan({ cls: "aie-mcp-meta", text: formatGroupCounts(group) });
 
     const actions = head.createDiv({ cls: "aie-mcp-card-actions" });
     const toggle = actions.createEl("button", {
       cls: "clickable-icon aie-catalog-btn",
-      attr: { "aria-label": t(expanded ? "catalog.mcp.hideTools" : "catalog.mcp.showTools") },
+      attr: { "aria-label": t("catalog.mcp.showTools") },
     });
-    setIcon(toggle, expanded ? "list-x" : "list");
-    toggle.addEventListener("click", () => this.toggleTools(group));
+    setIcon(toggle, "list");
+    toggle.addEventListener("click", () => {
+      new McpPackageToolsModal(this.deps.app, group, this.deps.service).open();
+    });
 
     const action = this.actionButton(
       actions,
@@ -192,7 +208,6 @@ export class McpPackagesSection {
     action.disabled = task.busy;
 
     this.renderProgress(row, group.id, task);
-    if (expanded) this.renderTools(row, group);
   }
 
   private renderProgress(parent: HTMLElement, key: string, task: TaskState): void {
@@ -205,71 +220,6 @@ export class McpPackagesSection {
       cls: task.error ? "aie-mcp-status aie-mcp-status-error" : "aie-mcp-status",
       text: task.status ?? "",
     });
-  }
-
-  private renderTools(parent: HTMLElement, group: McpCatalogGroup): void {
-    const tools = parent.createDiv({ cls: "aie-mcp-tools" });
-    if (this.toolsLoading.has(group.id)) {
-      tools.createDiv({ cls: "aie-mcp-status", text: t("catalog.mcp.loadingTools") });
-      return;
-    }
-    const error = this.toolsErrors.get(group.id);
-    if (error) {
-      tools.createDiv({ cls: "aie-mcp-status aie-mcp-status-error", text: error });
-      return;
-    }
-    for (const entry of group.entries) {
-      const manifest = this.manifests.get(entry.id);
-      if (!manifest) continue;
-      for (const file of manifest.files) {
-        if (file.kind === "tool") this.renderTool(tools, group, entry, manifest, file);
-      }
-    }
-  }
-
-  private renderTool(
-    parent: HTMLElement,
-    group: McpCatalogGroup,
-    entry: McpCatalogEntry,
-    manifest: McpPackageManifest,
-    file: McpPackageFile,
-  ): void {
-    const key = toolKey(entry, file);
-    const task = this.task(key);
-    const line = parent.createDiv({ cls: "aie-mcp-actions" });
-    line.createSpan({ text: file.title ?? file.name ?? file.path });
-    if (file.writes) line.createSpan({ cls: "aie-mcp-badge", text: t("catalog.mcp.writes") });
-    const button = this.actionButton(line, "download", t("catalog.mcp.download"), () =>
-      this.downloadTool(entry, manifest, file),
-    );
-    button.disabled = task.busy || this.task(group.id).busy;
-    this.renderProgress(parent, key, task);
-  }
-
-  private toggleTools(group: McpCatalogGroup): void {
-    if (this.expanded.delete(group.id)) {
-      this.draw();
-      return;
-    }
-    this.expanded.add(group.id);
-    void this.loadTools(group);
-  }
-
-  private async loadTools(group: McpCatalogGroup): Promise<void> {
-    const token = this.token;
-    this.toolsLoading.add(group.id);
-    this.toolsErrors.delete(group.id);
-    this.draw();
-    let error: string | undefined;
-    try {
-      for (const entry of group.entries) await this.manifestFor(entry);
-    } catch (err) {
-      error = t("catalog.mcp.toolsError", { error: errorMessage(err) });
-    }
-    if (token !== this.token) return;
-    this.toolsLoading.delete(group.id);
-    if (error) this.toolsErrors.set(group.id, error);
-    this.draw();
   }
 
   /** The package manifest, from the cache or from the repo. */
@@ -302,20 +252,6 @@ export class McpPackagesSection {
           before += manifest.files.length;
         }
         return t("catalog.mcp.installed", { written, skipped });
-      },
-      true,
-    );
-  }
-
-  private downloadTool(entry: McpCatalogEntry, manifest: McpPackageManifest, file: McpPackageFile): void {
-    const key = toolKey(entry, file);
-    void this.run(
-      key,
-      async () => {
-        const result = await this.deps.service.install(entry, manifest, { toolPath: file.path }, (done, total) =>
-          this.setProgress(key, total > 0 ? done / total : 1),
-        );
-        return t("catalog.mcp.installed", { written: result.written, skipped: result.skipped });
       },
       true,
     );

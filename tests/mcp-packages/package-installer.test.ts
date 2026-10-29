@@ -232,4 +232,26 @@ describe("removePackage", () => {
     expect(store.trashed).toEqual([`${PKG}/jsm-assets.db`, `${PKG}/index.md`, `${PKG}/a.md`]);
     expect(store.folders.has(PKG)).toBe(true);
   });
+
+  it("trashes legacy mcp.db if present instead of or in addition to entry.id.db", async () => {
+    const store = new FakeStore();
+    store.files.set(`${PKG}/mcp.db`, bin(1));
+    await removePackage(store, "Dados", entry, undefined, false);
+    expect(store.trashed).toContain(`${PKG}/mcp.db`);
+  });
+
+  it("trashes knownDbPath if passed", async () => {
+    const store = new FakeStore();
+    store.files.set("Other/custom.db", bin(1));
+    await removePackage(store, "Dados", entry, undefined, false, "Other/custom.db");
+    expect(store.trashed).toContain("Other/custom.db");
+  });
+
+  it("with deleteNotes on and no manifest, still trashes standard index note", async () => {
+    const store = new FakeStore();
+    store.files.set(`${PKG}/mcp.db`, bin(1));
+    store.files.set(`${PKG}/MCP - ${entry.name}.md`, "index content");
+    await removePackage(store, "Dados", entry, undefined, true);
+    expect(store.trashed).toEqual([`${PKG}/mcp.db`, `${PKG}/MCP - ${entry.name}.md`]);
+  });
 });

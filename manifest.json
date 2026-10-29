@@ -1,7 +1,7 @@
 {
   "id": "ai-ecosystem",
   "name": "AI Ecosystem",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "minAppVersion": "1.13.0",
   "description": "Single local server (REST and MCP) for AI agents such as Claude Code and Antigravity, with a live request inspector, a script runner and one-click setup of companion plugins.",
   "author": "Emanuell Pires",

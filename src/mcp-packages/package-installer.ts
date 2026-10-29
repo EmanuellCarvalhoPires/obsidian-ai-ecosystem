@@ -117,15 +117,55 @@ export async function removePackage(
   entry: McpCatalogEntry,
   manifest: McpPackageManifest | undefined,
   deleteNotes: boolean,
+  knownDbPath?: string,
 ): Promise<void> {
   const folder = packageTargetFolder(hubFolder, entry);
-  const dbPath = databasePathOf(folder, entry);
-  if (await store.exists(dbPath)) await store.trash(dbPath);
 
-  if (!deleteNotes || !manifest) return;
-  for (const file of manifest.files) {
-    if (file.kind === "database") continue;
-    const target = targetPathOf(folder, entry, file);
-    if (await store.exists(target)) await store.trash(target);
+  // Collect all possible database paths that could represent this package
+  const dbPathsToDelete = new Set<string>();
+  if (knownDbPath) {
+    dbPathsToDelete.add(knownDbPath.replace(/\\/g, "/"));
+  }
+  dbPathsToDelete.add(databasePathOf(folder, entry));
+  dbPathsToDelete.add(`${folder}/mcp.db`.replace(/\\/g, "/"));
+  if (manifest?.database) {
+    dbPathsToDelete.add(`${folder}/${manifest.database}`.replace(/\\/g, "/"));
+  }
+  if (manifest?.files) {
+    for (const file of manifest.files) {
+      if (file.kind === "database") {
+        dbPathsToDelete.add(`${folder}/${file.path}`.replace(/\\/g, "/"));
+      }
+    }
+  }
+
+  for (const dbPath of dbPathsToDelete) {
+    if (await store.exists(dbPath)) {
+      await store.trash(dbPath);
+    }
+  }
+
+  if (!deleteNotes) return;
+
+  if (manifest?.files) {
+    for (const file of manifest.files) {
+      if (file.kind === "database") continue;
+      const target = targetPathOf(folder, entry, file);
+      if (await store.exists(target)) await store.trash(target);
+    }
+  }
+
+  // Also trash the standard index note if present
+  const indexCandidates = [
+    `${folder}/MCP - ${entry.name}.md`.replace(/\\/g, "/"),
+    `${folder}/index.md`.replace(/\\/g, "/"),
+  ];
+  if (manifest?.index) {
+    indexCandidates.push(`${folder}/${manifest.index}`.replace(/\\/g, "/"));
+  }
+  for (const indexPath of indexCandidates) {
+    if (await store.exists(indexPath)) {
+      await store.trash(indexPath);
+    }
   }
 }

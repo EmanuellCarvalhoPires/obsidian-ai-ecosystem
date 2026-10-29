@@ -10,6 +10,7 @@ import {
   McpPackageManifest,
   MCP_PACKAGES_CATALOG_URL,
 } from "../../src/mcp-packages/catalog";
+import { formatGroupCounts } from "../../src/catalog/mcp-packages-section";
 
 function entry(overrides: Partial<McpCatalogEntry>): McpCatalogEntry {
   return {
@@ -117,5 +118,24 @@ describe("isAllowedCatalogUrl", () => {
 
   it("rejects other hosts", () => {
     expect(isAllowedCatalogUrl("https://example.com/x")).toBe(false);
+  });
+});
+
+describe("formatGroupCounts", () => {
+  it("formats tools only", () => {
+    expect(formatGroupCounts({ toolCount: 60, requestOnlyCount: 0 })).toBe("60 tools");
+  });
+
+  it("formats requests only when toolCount is 0", () => {
+    expect(formatGroupCounts({ toolCount: 0, requestCount: 60 })).toBe("60 requests");
+    expect(formatGroupCounts({ toolCount: 0, requestOnlyCount: 24, requestCount: 24 })).toBe("24 requests");
+  });
+
+  it("formats both when toolCount > 0 and requestOnlyCount > 0", () => {
+    expect(formatGroupCounts({ toolCount: 61, requestOnlyCount: 44, requestCount: 105 })).toBe("61 tools · 44 requests");
+  });
+
+  it("formats 0 tools when everything is 0", () => {
+    expect(formatGroupCounts({ toolCount: 0, requestOnlyCount: 0, requestCount: 0 })).toBe("0 tools");
   });
 });

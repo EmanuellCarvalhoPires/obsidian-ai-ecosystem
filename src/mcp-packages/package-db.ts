@@ -78,3 +78,79 @@ export function readPackageDb(filePath: string): PackageDbContent {
     db.close();
   }
 }
+
+export interface RawToolRecord {
+  table: "tools" | "requests";
+  id: string;
+  title: string;
+  packageId?: string;
+  packageName?: string;
+  method?: string;
+  path?: string;
+  kind?: string;
+  description?: string;
+  raw: Record<string, unknown>;
+  linkedRequest?: Record<string, unknown>;
+}
+
+/**
+ * Reads all tools and requests from a package .db with their full raw columns/values.
+ */
+function toSafeString(val: unknown): string {
+  if (typeof val === "string") return val;
+  if (typeof val === "number" || typeof val === "boolean") return val.toString();
+  return "";
+}
+
+export function readPackageDbRawTools(filePath: string, pkgInfo?: { id: string; name: string }): RawToolRecord[] {
+  const db = new DatabaseSync(filePath, { readOnly: true });
+  try {
+    const toolRows = rowsOf<Record<string, unknown>>(db, "SELECT * FROM tools") ?? [];
+    const requestRows = rowsOf<Record<string, unknown>>(db, "SELECT * FROM requests") ?? [];
+    const requestsById = new Map<string, Record<string, unknown>>();
+    for (const req of requestRows) {
+      if (typeof req.id === "string") requestsById.set(req.id, req);
+    }
+
+    const pairedReqIds = new Set<string>();
+    const records: RawToolRecord[] = toolRows.map((row) => {
+      const reqId = typeof row.request_id === "string" ? row.request_id : undefined;
+      if (reqId) pairedReqIds.add(reqId);
+      const linked = reqId ? requestsById.get(reqId) : undefined;
+      return {
+        table: "tools",
+        id: toSafeString(row.id),
+        title: toSafeString(row.title) || toSafeString(row.id),
+        packageId: pkgInfo?.id,
+        packageName: pkgInfo?.name,
+        kind: typeof row.kind === "string" ? row.kind : undefined,
+        description: typeof row.description === "string" ? row.description : undefined,
+        method: linked && typeof linked.method === "string" ? linked.method : undefined,
+        path: linked && typeof linked.path === "string" ? linked.path : undefined,
+        raw: row,
+        linkedRequest: linked,
+      };
+    });
+
+    for (const req of requestRows) {
+      if (typeof req.id === "string" && !pairedReqIds.has(req.id)) {
+        records.push({
+          table: "requests",
+          id: toSafeString(req.id),
+          title: toSafeString(req.title) || toSafeString(req.id),
+          packageId: pkgInfo?.id,
+          packageName: pkgInfo?.name,
+          method: typeof req.method === "string" ? req.method : undefined,
+          path: typeof req.path === "string" ? req.path : undefined,
+          kind: "request",
+          description: typeof req.description === "string" ? req.description : undefined,
+          raw: req,
+        });
+      }
+    }
+
+    return records;
+  } finally {
+    db.close();
+  }
+}

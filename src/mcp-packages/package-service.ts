@@ -6,6 +6,7 @@ import {
   GithubReader,
   McpCatalog,
   McpCatalogEntry,
+  McpCatalogGroup,
   McpDownloadSelection,
   McpPackageManifest,
   MCP_PACKAGES_CATALOG_URL,
@@ -14,7 +15,7 @@ import {
   isAllowedCatalogUrl,
 } from "./catalog";
 import { InstallResult, McpPackageStore, ensureHubFolder, installPackage, removePackage } from "./package-installer";
-import { PackageDbContent, readPackageDb } from "./package-db";
+import { PackageDbContent, RawToolRecord, readPackageDb, readPackageDbRawTools } from "./package-db";
 import { buildPackageIndexEntries, packageKeys } from "./package-index";
 
 export interface McpPackageServiceDeps {
@@ -66,6 +67,31 @@ export class McpPackageService implements McpPackagesHost {
     return this.packages.some((pkg) => pkg.id === entryId);
   }
 
+  /** Gets all tool and request rows from the SQLite databases installed for this catalog group. */
+  getRawToolsForGroup(group: McpCatalogGroup): RawToolRecord[] {
+    this.ensureLoaded();
+    const dbFiles = new Map<string, string>();
+    for (const f of this.deps.listDbFiles()) {
+      dbFiles.set(f.path.replace(/\\/g, "/"), f.absPath);
+    }
+
+    const records: RawToolRecord[] = [];
+    for (const entry of group.entries) {
+      const pkg = this.packages.find((p) => p.id === entry.id);
+      if (!pkg) continue;
+      const normalizedDbPath = pkg.dbPath.replace(/\\/g, "/");
+      const absPath = dbFiles.get(normalizedDbPath);
+      if (!absPath) continue;
+      try {
+        const tools = readPackageDbRawTools(absPath, { id: pkg.id, name: pkg.name });
+        records.push(...tools);
+      } catch (err) {
+        console.warn(`Failed to read raw tools from ${absPath}`, err);
+      }
+    }
+    return records;
+  }
+
   /** Rescans the vault. Listeners are told only when the list changed. */
   refresh(): void {
     if (this.reload()) this.notify();
@@ -85,7 +111,16 @@ export class McpPackageService implements McpPackagesHost {
 
   async remove(entry: McpCatalogEntry, manifest: McpPackageManifest | undefined, deleteNotes: boolean): Promise<void> {
     const hubFolder = await ensureHubFolder(this.deps.store);
-    await removePackage(this.deps.store, hubFolder, entry, manifest, deleteNotes);
+    const installed = this.packages.find((pkg) => pkg.id === entry.id);
+    let resolvedManifest = manifest;
+    if (!resolvedManifest && deleteNotes) {
+      try {
+        resolvedManifest = await this.fetchManifest(entry);
+      } catch {
+        // Continue with best-effort deletion if manifest can't be fetched
+      }
+    }
+    await removePackage(this.deps.store, hubFolder, entry, resolvedManifest, deleteNotes, installed?.dbPath);
     this.refresh();
   }
 
@@ -105,7 +140,7 @@ export class McpPackageService implements McpPackagesHost {
   /** Replaces the cache. Returns true when the list changed. */
   private reload(): boolean {
     const scanned = this.scan();
-    const signature = scanned.map(({ pkg, updatedAt }) => `${pkg.id}|${pkg.toolCount}|${updatedAt}`).join("\n");
+    const signature = scanned.map(({ pkg, updatedAt }) => `${pkg.id}|${pkg.toolCount}|${pkg.requestCount ?? 0}|${updatedAt}`).join("\n");
     this.packages = scanned.map((item) => item.pkg);
     this.entries = scanned.flatMap((item) => item.entries);
     this.loaded = true;
@@ -156,6 +191,7 @@ export class McpPackageService implements McpPackagesHost {
           serviceTag: pkg?.service_tag ?? undefined,
           groupId: pkg?.group_id ?? undefined,
           toolCount: content.tools.length,
+          requestCount: content.requests.size,
           dbPath: file.path,
         },
         updatedAt: pkg?.updated_at ?? "",
