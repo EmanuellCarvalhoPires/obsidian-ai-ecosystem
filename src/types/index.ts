@@ -70,7 +70,11 @@ export interface ClientRecord {
   lastUsedAt?: string;
   /** Module id this client was imported from (e.g. "environment-variables"), if any. */
   importedFrom?: string;
+  /** Present when this client was connected by the one-click integration or setup skill. */
+  integration?: IntegrationId;
 }
+
+export type IntegrationId = "claude-code" | "codex" | "antigravity" | "cursor";
 
 // ---------------------------------------------------------------------------
 // HTTP routes
@@ -689,6 +693,8 @@ export interface AIEcosystemSettings {
   alternativePort: number;
   /** Port the server actually used last time. Tried first on start, so MCP clients keep their URL. Cleared when a port setting changes. */
   lastPort?: number;
+  /** MCP server name registered in AI clients for this vault (e.g. "ai-ecosystem-cofre"). */
+  mcpServerName?: string;
   clients: ClientRecord[];
   /** Module ids whose clients were already imported (import happens once). */
   importedClientsFrom: string[];
@@ -758,3 +764,37 @@ export type ModuleInstallState =
   | { kind: "active"; installedVersion: string; latestVersion?: string; registered: boolean }
   | { kind: "update-available"; installedVersion: string; latestVersion: string; enabled: boolean }
   | { kind: "unavailable"; reason: string };
+
+// ---------------------------------------------------------------------------
+// MCP packages (downloaded tool notes, see src/mcp-packages)
+// ---------------------------------------------------------------------------
+
+/** Name of the service the AI Ecosystem registers for the installed MCP packages. */
+export const MCP_PACKAGES_SERVICE = "mcp-packages";
+
+/** A package found in the vault: one .db file with an mcp_package row or tools. */
+export interface InstalledMcpPackage {
+  id: string;
+  name: string;
+  app: string;
+  tag: string;
+  logo: string;
+  serviceTag?: string;
+  groupId?: string;
+  toolCount: number;
+  requestCount?: number;
+  /** Vault-relative path of the .db file. */
+  dbPath: string;
+}
+
+/** The part of the "mcp-packages" service other modules use. */
+export interface McpPackagesService {
+  list(): InstalledMcpPackage[];
+  /** Returns an unsubscribe function. */
+  onChange(listener: () => void): () => void;
+}
+
+/** What the AI Ecosystem itself gets from its McpPackageService. */
+export interface McpPackagesHost extends McpPackagesService {
+  indexEntries(): ToolIndexEntry[];
+}

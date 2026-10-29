@@ -33,7 +33,7 @@ const MESSAGES = {
   "ai-vault-search":
     "Use search (conteúdo), find (nome), list_files ou get_section (AI Vault Search). O terminal só vale se o plugin estiver fora do ar.",
   "environment-variables":
-    "Este host tem secret no Environment Keys: use search_vault_tools e run_vault_tool (ou http_request com {{secret:NOME}}).",
+    "Este host tem secret no Environment Keys: use tools_find e tools_run (ou http_request com {{secret:NOME}}).",
   "ai-scripts":
     "Este script está numa pasta permitida: rode com ecosystem_run_script (ou run_ai_script se estiver registrado no AI Scripts).",
   "ai-templates": "Já existe molde para esta nota: use create_note_from_template (AI Templates).",

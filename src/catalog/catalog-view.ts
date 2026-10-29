@@ -8,6 +8,10 @@ import { installFromCatalog } from "./install-flow";
 import type { CatalogSetupHost } from "./install-flow";
 import { latestVersionOf } from "./installer-service";
 import type { InstallerService, InstallResult, LatestRelease } from "./installer-service";
+import { McpPackagesSection } from "./mcp-packages-section";
+import type { McpPackagesSectionDeps } from "./mcp-packages-section";
+import { ClientsSection } from "../clients/clients-section";
+import type { ClientsSectionHost } from "../clients/clients-section";
 
 export const CATALOG_VIEW_TYPE = "ai-ecosystem-catalog";
 
@@ -16,10 +20,16 @@ export interface CatalogViewDeps {
   installer: InstallerService;
   /** The setup side of the core. Without it a module installs with no confirmation and no setup. */
   setup?: CatalogSetupHost;
+  /** The MCP packages block under the cards. Without it the block is not shown. */
+  mcpPackages?: McpPackagesSectionDeps;
+  /** The host providing AI client connection operations. */
+  clientsHost?: ClientsSectionHost;
 }
 
 export class CatalogView extends ItemView {
   private readonly deps: CatalogViewDeps;
+  private readonly mcpSection: McpPackagesSection | undefined;
+  private readonly clientsSection: ClientsSection | undefined;
   private catalog: Catalog | undefined;
   private source: "remote" | "embedded" = "remote";
   private readonly releases = new Map<string, LatestRelease>();
@@ -29,6 +39,8 @@ export class CatalogView extends ItemView {
   constructor(leaf: WorkspaceLeaf, deps: CatalogViewDeps) {
     super(leaf);
     this.deps = deps;
+    this.mcpSection = deps.mcpPackages ? new McpPackagesSection(deps.mcpPackages) : undefined;
+    this.clientsSection = deps.clientsHost ? new ClientsSection(this.app, deps.clientsHost, () => this.refresh()) : undefined;
   }
 
   getViewType(): string {
@@ -51,6 +63,7 @@ export class CatalogView extends ItemView {
 
   onClose(): Promise<void> {
     this.loadToken++;
+    this.mcpSection?.dispose();
     return Promise.resolve();
   }
 
@@ -129,7 +142,14 @@ export class CatalogView extends ItemView {
       const grid = root.createDiv({ cls: "aie-catalog-grid" });
       for (const entry of this.catalog.modules) this.renderCard(grid, entry);
     }
-    root.createEl("p", { cls: "aie-catalog-footer", text: t("catalog.footer") });
+    if (this.clientsSection) {
+      const clientsBox = root.createDiv({ cls: "aie-catalog-clients-box" });
+      const secHeader = clientsBox.createDiv({ cls: "aie-catalog-header" });
+      const titles = secHeader.createDiv();
+      titles.createEl("h3", { cls: "aie-catalog-title", text: t("catalog.clients.title") });
+      this.clientsSection.renderBody(clientsBox);
+    }
+    this.mcpSection?.mount(root);
   }
 
   private renderCard(grid: HTMLElement, entry: CatalogEntry): void {

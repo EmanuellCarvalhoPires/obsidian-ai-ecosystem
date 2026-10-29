@@ -127,6 +127,10 @@ script: Tools/report.py
 
 **Open module catalog** shows the companion plugins as cards with their state (not installed, installing, installed but disabled, active, update available). One click installs and enables a module without restarting Obsidian; if Obsidian's internal installer is not available, the plugin downloads the release files itself, and as a last resort opens the plugin page. The catalog comes from `catalog.json` in this repository, with a copy bundled in the plugin as a fallback. The catalog compares each module's version with the `manifest.json` of its release.
 
+## MCP packages
+
+Below the modules, after a divider, the catalog has an **MCP packages** section. It downloads packages only from repositories of the `EmanuellCarvalhoPires` owner, only from `raw.githubusercontent.com/EmanuellCarvalhoPires/...`, and only when you click. Each package is written to `MCP Tools\<package>\` in the vault and its tools are indexed in the core's `tools.db` (module `ai-ecosystem`, type `api`). Find them with `tools_find` and run them with `tools_run`. Execution stays in Environment Keys, which resolves the secrets, through its `mcp-packages` service.
+
 ## For module authors
 
 ### Provider API
@@ -418,6 +422,10 @@ script: Ferramentas/relatorio.py
 ## Catálogo de módulos
 
 **Abrir catálogo de módulos** mostra os plugins complementares em cards com o estado de cada um (não instalado, instalando, instalado e desativado, ativo, atualização disponível). Um clique instala e ativa um módulo sem reiniciar o Obsidian; se a rotina interna de instalação do Obsidian não existir, o plugin baixa os arquivos da release por conta própria e, em último caso, abre a página do plugin. O catálogo vem do `catalog.json` deste repositório, com uma cópia embutida no plugin como reserva. O catálogo compara a versão de cada módulo com o `manifest.json` da release.
+
+## Pacotes MCP
+
+Abaixo dos módulos, depois de uma linha divisória, o catálogo tem a seção **Pacotes MCP**. Ela baixa pacotes somente de repositórios do dono `EmanuellCarvalhoPires`, somente de `raw.githubusercontent.com/EmanuellCarvalhoPires/...`, e só quando você clica. Cada pacote é gravado em `MCP Tools\<pacote>\` no cofre, e as tools dele são indexadas no `tools.db` do núcleo (módulo `ai-ecosystem`, tipo `api`). Elas são achadas com `tools_find` e executadas com `tools_run`. A execução continua no Environment Keys, que resolve os segredos, pelo serviço `mcp-packages`.
 
 ## Para autores de módulos
 

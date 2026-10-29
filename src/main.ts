@@ -1,5 +1,5 @@
 import { FileSystemAdapter, Notice, Plugin, apiVersion, debounce, setIcon } from "obsidian";
-import type { WorkspaceLeaf } from "obsidian";
+import type { TAbstractFile, WorkspaceLeaf } from "obsidian";
 import catalogData from "../catalog.json";
 import { CatalogService } from "./catalog/catalog-service";
 import { CATALOG_VIEW_TYPE, CatalogView } from "./catalog/catalog-view";
@@ -12,6 +12,9 @@ import type { HookActionResult, HookInstallPlan, HooksStatus } from "./hooks/hoo
 import type { HookMode } from "./hooks/state-dir";
 import { currentLanguage, t } from "./i18n";
 import { INSPECTOR_VIEW_TYPE, InspectorView } from "./inspector/inspector-view";
+import { MCP_PACKAGES_CATALOG_URL } from "./mcp-packages/catalog";
+import { McpPackageService } from "./mcp-packages/package-service";
+import { HttpGithubReader, ObsidianMcpPackageStore, listVaultDbFiles } from "./mcp-packages/obsidian-store";
 import type { ScreenDefinition } from "./screens/model";
 import { ObsidianScreenHost } from "./screens/ui/obsidian-host";
 import { PreviewModal } from "./screens/ui/preview-modal";
@@ -24,10 +27,15 @@ import {
   type AIEcosystemAPI,
   type AIEcosystemSettings,
   type ClientRecord,
+  type IntegrationId,
   type ModuleInfo,
   type ServerStatus,
   type ServiceInfo,
 } from "./types";
+import { integrationById, normalizeIntegrationId, type Integration } from "./clients/integrations";
+import { findConnectedClient } from "./clients/clients-section";
+import { candidateServerNames, serverNameFor, vaultIdOf, SERVER_NAME_PATTERN } from "./clients/vault-identity";
+import { hashToken } from "./server/auth";
 
 const LAST_USED_INTERVAL_MS = 60_000;
 
@@ -37,6 +45,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
   settings: AIEcosystemSettings = normalizeSettings(undefined);
 
   private core!: Ecosystem;
+  private mcpPackages!: McpPackageService;
   private tab: AIEcosystemSettingTab | undefined;
   private statusBarEl: HTMLElement | undefined;
   private statusIconEl: HTMLElement | undefined;
@@ -50,6 +59,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
   private readonly refreshUiSoon = debounce(() => this.refreshUi(), 300, true);
   private readonly rescanScripts = debounce(() => this.scanDeclaredScripts(), 1000, true);
   readonly scheduleServerRestart = debounce(() => void this.restartServer(), 1200, true);
+  private readonly refreshPackagesSoon = debounce(() => this.mcpPackages?.refresh(), 1000, true);
 
   async onload(): Promise<void> {
     this.settings = normalizeSettings(await this.loadData());
@@ -58,6 +68,13 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     if (!(adapter instanceof FileSystemAdapter)) {
       throw new Error("AI Ecosystem needs a vault stored in a local folder.");
     }
+
+    this.mcpPackages = new McpPackageService({
+      store: new ObsidianMcpPackageStore(this.app),
+      reader: () => new HttpGithubReader(MCP_PACKAGES_CATALOG_URL),
+      listDbFiles: () => listVaultDbFiles(this.app),
+    });
+    this.register(this.mcpPackages.onChange(() => this.refreshUiSoon()));
 
     this.core = new Ecosystem({
       vaultBasePath: adapter.getBasePath(),
@@ -77,6 +94,15 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
       saveSettings: () => this.saveSettings(),
       onScriptFoldersAdded: (folders) => new Notice(t("core.notice.scriptFoldersAdded", { folders: folders.join(", ") })),
       screenHost: new ObsidianScreenHost(this.app),
+      mcpPackages: this.mcpPackages,
+      connectAgents: async (agents: string[]) => {
+        for (const agent of agents) {
+          const id = normalizeIntegrationId(agent);
+          if (id) {
+            await this.connectIntegration(id, false);
+          }
+        }
+      },
     });
     this.api = this.core.api;
     const { logger, redactor } = this.core;
@@ -98,7 +124,15 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
       begin: (entry) => this.core.setup?.beginCatalogInstall(entry.id, entry.name),
       finish: async (entry, ok) => (await this.core.setup?.finishCatalogInstall(entry.id, ok)) ?? { nodeMissing: false },
     };
-    this.registerView(CATALOG_VIEW_TYPE, (leaf) => new CatalogView(leaf, { catalog, installer, setup }));
+    const mcpPackages = {
+      app: this.app,
+      service: this.mcpPackages,
+      isEnvKeysActive: () => this.core.registry.has("environment-variables"),
+    };
+    this.registerView(
+      CATALOG_VIEW_TYPE,
+      (leaf) => new CatalogView(leaf, { catalog, installer, setup, mcpPackages, clientsHost: this }),
+    );
 
     this.addRibbonIcon("activity", t("core.ribbon.inspector"), () => void this.openInspector("tab"));
     this.addRibbonIcon("package-plus", t("core.ribbon.catalog"), () => void this.openCatalog());
@@ -118,6 +152,17 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     this.registerEvent(this.app.metadataCache.on("changed", () => this.rescanScripts()));
     this.registerEvent(this.app.metadataCache.on("deleted", () => this.rescanScripts()));
 
+    // MCP packages (installed .db files).
+    this.app.workspace.onLayoutReady(() => this.mcpPackages.refresh());
+    const onVaultFileChange = (file: TAbstractFile): void => {
+      if (file.path.endsWith(".db")) this.refreshPackagesSoon();
+    };
+    this.registerEvent(this.app.vault.on("create", onVaultFileChange));
+    this.registerEvent(this.app.vault.on("delete", onVaultFileChange));
+    this.registerEvent(this.app.vault.on("rename", onVaultFileChange));
+
+    await this.ensureServerName();
+
     // Announces "ready" before the server starts (see Ecosystem.start).
     this.core.start().catch((err: unknown) => console.error("[AI Ecosystem] The server failed to start", err));
   }
@@ -127,6 +172,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     this.scheduleServerRestart.cancel();
     this.refreshUiSoon.cancel();
     this.rescanScripts.cancel();
+    this.refreshPackagesSoon.cancel();
     this.saveSoon.cancel();
     void this.saveSettings();
     void this.core?.unload();
@@ -168,6 +214,10 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
 
   listServices(): ServiceInfo[] {
     return this.core.bus.list();
+  }
+
+  get packages(): McpPackageService {
+    return this.mcpPackages;
   }
 
   // ---- Claude Code hooks (settings tab) -------------------------------------
@@ -218,17 +268,133 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     return this.core.screens?.removeSaved(slug) ?? false;
   }
 
-  async createClient(name: string): Promise<{ record: ClientRecord; token: string }> {
-    const created = createClient(name);
+  get vaultId(): string {
+    const adapter = this.app.vault.adapter;
+    return adapter instanceof FileSystemAdapter ? vaultIdOf(adapter.getBasePath()) : "vault";
+  }
+
+  getServerName(): string {
+    return this.settings.mcpServerName?.trim() || serverNameFor(this.app.vault.getName(), this.vaultId);
+  }
+
+  async ensureServerName(): Promise<void> {
+    const s = this.settings;
+    if (s.mcpServerName && SERVER_NAME_PATTERN.test(s.mcpServerName)) return;
+    const connected = s.clients.filter((c) => c.integration);
+    let chosen: string | undefined;
+    for (const candidate of candidateServerNames(this.app.vault.getName(), this.vaultId)) {
+      for (const c of connected) {
+        if (await this.ownsRegistration(integrationById(c.integration!), candidate, c)) {
+          chosen = candidate;
+          break;
+        }
+      }
+      if (chosen) break;
+    }
+    s.mcpServerName = chosen ?? serverNameFor(this.app.vault.getName(), this.vaultId);
+    await this.saveSettings();
+  }
+
+  private async ownsRegistration(integration: Integration | undefined, name: string, client: ClientRecord): Promise<boolean> {
+    if (!integration) return false;
+    const token = await integration.registeredToken(name).catch(() => null);
+    return !!token && hashToken(token) === client.tokenHash;
+  }
+
+  async setMcpServerName(name: string): Promise<void> {
+    const old = this.getServerName();
+    const trimmed = name.trim();
+    if (trimmed === old || !SERVER_NAME_PATTERN.test(trimmed)) return;
+    for (const c of this.settings.clients.filter((x) => x.integration)) {
+      const integration = integrationById(c.integration!);
+      if (await this.ownsRegistration(integration, old, c)) {
+        await integration?.disconnect(old).catch(() => undefined);
+      }
+    }
+    this.settings.mcpServerName = trimmed;
+    await this.saveSettings();
+    await this.reconnectIntegrations();
+    this.refreshUiSoon();
+  }
+
+  async createClient(name: string, integration?: IntegrationId): Promise<{ record: ClientRecord; token: string }> {
+    const created = createClient(name, integration);
     this.settings.clients = [...this.settings.clients, created.record];
     await this.saveSettings();
     return created;
   }
 
   async revokeClient(id: string): Promise<void> {
+    const client = this.settings.clients.find((c) => c.id === id);
+    if (client?.integration) {
+      const integration = integrationById(client.integration);
+      const serverName = this.getServerName();
+      if (await this.ownsRegistration(integration, serverName, client)) {
+        await integration?.disconnect(serverName).catch(() => undefined);
+      }
+    }
     this.settings.clients = this.settings.clients.filter((c) => c.id !== id);
     this.clientMarks.delete(id);
     await this.saveSettings();
+  }
+
+  async connectIntegration(id: IntegrationId, quiet = false): Promise<boolean> {
+    const integration = integrationById(id);
+    if (!integration) return false;
+    const status = this.getServerStatus();
+    if (!status.running) {
+      if (!quiet) new Notice(t("core.notice.notRunning"));
+      return false;
+    }
+    const serverName = this.getServerName();
+    const url = mcpUrl(status.port);
+    const { record, token } = await this.createClient(integration.label, id);
+    try {
+      await integration.connect(url, token, serverName);
+    } catch (err) {
+      await this.revokeClient(record.id);
+      if (!quiet) {
+        new Notice(
+          t("settings.clients.connectFailed", {
+            name: integration.label,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+          10_000,
+        );
+      }
+      return false;
+    }
+    this.settings.clients = this.settings.clients.filter((c) => c.id === record.id || c.integration !== id);
+    await this.saveSettings();
+    this.refreshUiSoon();
+    if (!quiet) new Notice(t("settings.clients.connectedNotice", { name: integration.label }), 8_000);
+    return true;
+  }
+
+  async disconnectIntegration(id: IntegrationId): Promise<void> {
+    const integration = integrationById(id);
+    const serverName = this.getServerName();
+    const client = findConnectedClient(this.settings.clients, id);
+    if (client) {
+      if (await this.ownsRegistration(integration, serverName, client)) {
+        await integration?.disconnect(serverName).catch(() => undefined);
+      }
+      await this.revokeClient(client.id);
+    }
+    this.refreshUiSoon();
+  }
+
+  async detectIntegration(id: IntegrationId): Promise<boolean> {
+    const integration = integrationById(id);
+    if (!integration) return false;
+    return integration.detect().catch(() => false);
+  }
+
+  async reconnectIntegrations(): Promise<void> {
+    const ids = this.settings.clients.map((c) => c.integration).filter((i): i is IntegrationId => !!i);
+    for (const id of ids) {
+      await this.connectIntegration(id, true);
+    }
   }
 
   onInterpretersChanged(): void {
@@ -293,8 +459,12 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
   private onServerStatus(status: ServerStatus): void {
     if (this.unloaded) return;
     this.notifier.notify(status);
+    const portChanged = status.running && this.settings.lastPort !== status.port;
     this.rememberPort(status);
     this.updateStatusBar(status);
+    if (portChanged) {
+      void this.reconnectIntegrations();
+    }
     this.refreshUiSoon();
   }
 

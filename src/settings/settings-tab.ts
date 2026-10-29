@@ -1,14 +1,16 @@
 // Settings tab (imperative, Obsidian-standard): server, clients, scripts, inspector, modules.
 import { Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import type { App, Plugin } from "obsidian";
+import { ClientsSection, type ClientsSectionHost } from "../clients/clients-section";
+import { SERVER_NAME_PATTERN } from "../clients/vault-identity";
 import { mcpUrl, presentServer } from "../core/notices";
 import { t } from "../i18n";
 import { screenToolName } from "../screens/model";
 import type { ScreenDefinition } from "../screens/model";
-import type { AIEcosystemSettings, ClientRecord, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
+import type { AIEcosystemSettings, ClientRecord, IntegrationId, ModuleInfo, ServerStatus, ServiceInfo } from "../types";
 import { renderHooksGroup } from "./hooks-section";
 import type { HooksSettingsHost } from "./hooks-section";
-import { ConfirmModal, NewClientModal, PromptModal } from "./modals";
+import { ConfirmModal, PromptModal } from "./modals";
 import {
   MAX_ENTRIES,
   MAX_PORT,
@@ -25,7 +27,7 @@ import {
 } from "./settings-store";
 
 /** What the settings tab needs from the plugin. */
-export interface SettingsHost extends HooksSettingsHost {
+export interface SettingsHost extends HooksSettingsHost, ClientsSectionHost {
   settings: AIEcosystemSettings;
   saveSettings(): Promise<void>;
   getServerStatus(): ServerStatus;
@@ -38,6 +40,11 @@ export interface SettingsHost extends HooksSettingsHost {
   /** Creates a client, stores its hash and returns the token (shown once). */
   createClient(name: string): Promise<{ record: ClientRecord; token: string }>;
   revokeClient(id: string): Promise<void>;
+  getServerName?(): string;
+  setMcpServerName?(name: string): Promise<void>;
+  connectIntegration?(id: IntegrationId): Promise<boolean>;
+  disconnectIntegration?(id: IntegrationId): Promise<void>;
+  detectIntegration?(id: IntegrationId): Promise<boolean>;
   onInterpretersChanged(): void;
   /** The tool exposure changed: the MCP clients are told to read tools/list again. */
   onToolExposureChanged?(): void;
@@ -58,16 +65,14 @@ const INTERPRETERS = [
   { key: "powershell", label: "settings.scripts.powershell" },
 ] as const;
 
-function formatDate(iso: string | undefined): string {
-  if (!iso) return t("settings.clients.never");
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
-}
+
 
 export class AIEcosystemSettingTab extends PluginSettingTab {
+  private readonly clientsSection: ClientsSection;
   constructor(app: App, plugin: Plugin, private readonly host: SettingsHost) {
     super(app, plugin);
     this.icon = "server";
+    this.clientsSection = new ClientsSection(app, host, () => this.display());
   }
 
   /** Re-renders the tab if currently visible. Safe to call while the tab is closed. */
@@ -194,6 +199,24 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t("settings.server.url"))
       .setDesc(mcpUrl(this.host.getServerStatus().port));
+
+    if (this.host.getServerName) {
+      new Setting(containerEl)
+        .setName(t("settings.server.name"))
+        .setDesc(t("settings.server.nameDesc"))
+        .addText((text) => {
+          text.setValue(this.host.getServerName?.() ?? "");
+          text.onChange(async (val) => {
+            const trimmed = val.trim();
+            if (SERVER_NAME_PATTERN.test(trimmed)) {
+              text.inputEl.removeClass("has-error");
+              await this.host.setMcpServerName?.(trimmed);
+            } else {
+              text.inputEl.addClass("has-error");
+            }
+          });
+        });
+    }
   }
 
   private validatePort(value: number, other: number): string | undefined {
@@ -245,72 +268,10 @@ export class AIEcosystemSettingTab extends PluginSettingTab {
           .setButtonText(t("settings.clients.add"))
           .setIcon("plus")
           .setCta()
-          .onClick(() => this.promptClientName()),
+          .onClick(() => this.clientsSection.promptManualClient()),
       );
 
-    const { clients } = this.host.settings;
-    if (clients.length === 0) {
-      containerEl.createDiv({ cls: "aie-empty-state", text: t("settings.clients.empty") });
-      return;
-    }
-
-    for (const client of clients) {
-      this.renderClient(containerEl, client);
-    }
-  }
-
-  private renderClient(containerEl: HTMLElement, client: ClientRecord): void {
-    const setting = new Setting(containerEl);
-    setting.setName(client.name);
-    setting.setDesc(
-      t("settings.clients.details", {
-        hint: client.hint ? `${client.hint}...` : "-",
-        created: formatDate(client.createdAt),
-        lastUsed: formatDate(client.lastUsedAt),
-      }),
-    );
-    if (client.importedFrom) {
-      setting.nameEl.createSpan({ cls: "aie-badge", text: t("settings.clients.imported") });
-    }
-    setting.addButton((btn) =>
-      btn
-        .setButtonText(t("settings.clients.revoke"))
-        .setIcon("trash-2")
-        .setDestructive()
-        .onClick(() => this.confirmRevoke(client)),
-    );
-  }
-
-  private promptClientName(): void {
-    new PromptModal(this.app, {
-      title: t("settings.clients.addTitle"),
-      label: t("settings.clients.nameLabel"),
-      placeholder: t("settings.clients.namePlaceholder"),
-      submitText: t("settings.clients.create"),
-      onSubmit: async (name) => {
-        const { token } = await this.host.createClient(name);
-        this.display();
-        new NewClientModal(this.app, {
-          clientName: name,
-          token,
-          url: mcpUrl(this.host.getServerStatus().port),
-        }).open();
-      },
-    }).open();
-  }
-
-  private confirmRevoke(client: ClientRecord): void {
-    new ConfirmModal(this.app, {
-      title: t("settings.clients.revokeTitle", { name: client.name }),
-      paragraphs: [t("settings.clients.revokeText")],
-      confirmText: t("settings.clients.revoke"),
-      icon: "alert-triangle",
-      danger: true,
-      onConfirm: async () => {
-        await this.host.revokeClient(client.id);
-        this.display();
-      },
-    }).open();
+    this.clientsSection.renderBody(containerEl);
   }
 
   // ---- scripts ------------------------------------------------------------

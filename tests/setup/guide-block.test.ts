@@ -54,7 +54,7 @@ describe("buildGuideBlock", () => {
     expect(gemini).toContain("### Using it without hooks");
     expect(gemini).toContain("`search`");
     expect(gemini).toContain("instead of Grep, Glob or terminal searches");
-    expect(gemini).toContain("`search_vault_tools` and `run_vault_tool`");
+    expect(gemini).toContain("`tools_find` and `tools_run`");
     expect(gemini).toContain("instead of `curl`, `wget` or `Invoke-RestMethod`");
     expect(gemini).toContain("`ecosystem_run_script`");
     expect(gemini).toContain("`create_note_from_template`");
