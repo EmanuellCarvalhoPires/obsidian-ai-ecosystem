@@ -178,7 +178,7 @@ describe("setup skills", () => {
   it("the AI Scripts skill migrates with consent, scans for secrets and keeps the originals", () => {
     for (const lang of LANGS) {
       const text = buildSkill("ai-scripts", "AI Scripts", lang);
-      for (const word of ["`pastas_permitidas`", "`pasta_de_scripts`", "`pode_gravar_fora_do_cofre`", "`migrar_scripts`", "search_notes", "list_files", "{{secret:NOME}}", "env_criar_secret", "list_ai_scripts", "get_script_schema"]) {
+      for (const word of ["`pastas_permitidas`", "`pasta_de_scripts`", "`pode_gravar_fora_do_cofre`", "`migrar_scripts`", "`search`", "list_files", "{{secret:NOME}}", "env_criar_secret", "list_ai_scripts", "get_script_schema"]) {
         expect(text.replace(/\{\{secret:NAME\}\}/g, "{{secret:NOME}}"), word).toContain(word);
       }
       expect(text).toContain(lang === "pt" ? "**busca completa**" : "**full search**");

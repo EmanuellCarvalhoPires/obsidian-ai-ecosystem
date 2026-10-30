@@ -29,7 +29,7 @@ Nesta ordem:
 Só se o usuário disse que sim em `migrar_templates`. **As notas originais não são alteradas, movidas nem apagadas.**
 
 1. Pergunte, com `AskUserQuestion`, se pode fazer uma **busca completa** de moldes no cofre. Se não, pule a migração.
-2. Busque com as tools do AI Vault Search (`search_notes`, `list_files`, `list_folders`), não com Grep ou Glob: pastas de moldes e templates, notas com placeholders (`{{...}}`, `<% ... %>`) e as listadas em `list_templates` (essas já existem: ignore-as).
+2. Busque com as tools do AI Vault Search (`search`, `find`, `list_files`, `list_folders`), não com Grep ou Glob: pastas de moldes e templates, notas com placeholders (`{{...}}`, `<% ... %>`) e as listadas em `list_templates` (essas já existem: ignore-as).
 3. Para cada molde encontrado, leia a nota e **extraia os campos** (nome, tipo e se é obrigatório). Para o formato esperado, chame `list_templates` e `get_template_schema` em um template que já exista; se não houver nenhum, siga o que `create_template` descreve.
 4. Mostre, molde por molde, os campos extraídos e o caminho de destino sugerido, e peça a **aprovação** com `AskUserQuestion` (aprovar, ajustar ou pular cada um). Ajuste o que o usuário pedir.
 5. Só depois de aprovado, crie cada template com `create_template`. Confira com `list_templates` e com `preview_template` (dados de exemplo) que o resultado sai como a nota original.

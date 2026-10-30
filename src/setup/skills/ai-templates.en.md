@@ -29,7 +29,7 @@ In this order:
 Only if the user said yes to `migrar_templates`. **The original notes are not changed, moved or deleted.**
 
 1. Ask, with `AskUserQuestion`, whether you may run a **full search** for templates in the vault. If not, skip the migration.
-2. Search with the AI Vault Search tools (`search_notes`, `list_files`, `list_folders`), not with Grep or Glob: template folders, notes with placeholders (`{{...}}`, `<% ... %>`) and the ones listed by `list_templates` (those already exist: ignore them).
+2. Search with the AI Vault Search tools (`search`, `find`, `list_files`, `list_folders`), not with Grep or Glob: template folders, notes with placeholders (`{{...}}`, `<% ... %>`) and the ones listed by `list_templates` (those already exist: ignore them).
 3. For each template found, read the note and **extract the fields** (name, type and whether it is required). For the expected format, call `list_templates` and `get_template_schema` on a template that already exists; if there is none, follow what `create_template` describes.
 4. Show, template by template, the extracted fields and the suggested target path, and ask for **approval** with `AskUserQuestion` (approve, adjust or skip each one). Adjust whatever the user asks.
 5. Only after approval, create each template with `create_template`. Check with `list_templates` and with `preview_template` (sample data) that the result comes out like the original note.

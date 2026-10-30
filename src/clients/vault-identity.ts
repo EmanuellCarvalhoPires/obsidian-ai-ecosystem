@@ -9,7 +9,7 @@ export const DEFAULT_MCP_SERVER_NAME = "ai-ecosystem";
 export const LEGACY_MCP_SERVER_NAME = "environment-variables";
 
 /** MCP server names accepted by Claude Code, Codex (TOML bare keys), Cursor and Antigravity. */
-export const SERVER_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const SERVER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 /** Stable, non-reversible id of a vault, from its folder on disk. */
 export function vaultIdOf(basePath: string): string {

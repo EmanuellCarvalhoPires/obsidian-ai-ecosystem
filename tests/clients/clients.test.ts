@@ -40,6 +40,12 @@ describe("vault-identity", () => {
     expect(SERVER_NAME_PATTERN.test(name)).toBe(true);
   });
 
+  it("accepts upper case letters but not spaces in a server name", () => {
+    expect(SERVER_NAME_PATTERN.test("AI-Ecosystem")).toBe(true);
+    expect(SERVER_NAME_PATTERN.test("AI Ecosystem")).toBe(false);
+    expect(SERVER_NAME_PATTERN.test("-AI")).toBe(false);
+  });
+
   it("provides candidate legacy and modern server names", () => {
     const candidates = candidateServerNames("Notes", "1234567890abcdef");
     expect(candidates).toEqual([
