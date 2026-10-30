@@ -24,6 +24,8 @@ export function defaultMode(moduleId: string): HookMode {
   return MODULE_DEFAULT_MODES[moduleId] ?? "bloquear";
 }
 
+export type ShellSearchMode = "avisar" | "bloquear";
+
 export interface StateConfig {
   schemaVersion: number;
   vaultPath: string;
@@ -31,6 +33,13 @@ export interface StateConfig {
   settingsFile: string;
   /** Obsidian config folder name (app.vault.configDir); the Grep rule leaves it alone. */
   configDir?: string;
+  /** MCP server name of the vault (the hook script builds the ToolSearch hint from it). Stored as is; the script validates it. */
+  serverName?: string;
+  /**
+   * What ai-vault-search does with a search run through Bash or PowerShell while its mode is "bloquear":
+   * "avisar" (default, a reminder only; Grep and Glob are still denied) or "bloquear" (deny them too).
+   */
+  shellSearch?: ShellSearchMode;
   /** Missing mode means the module default (see defaultMode: "bloquear" for most modules). */
   modos: Record<string, HookMode>;
 }
@@ -160,11 +169,15 @@ export class StateDir {
         : DEFAULT_SETTINGS_FILE;
     const config: StateConfig = { schemaVersion: SCHEMA_VERSION, vaultPath: this.vaultPath, settingsFile, modos };
     if (typeof raw.configDir === "string" && raw.configDir !== "") config.configDir = raw.configDir;
+    if (typeof raw.serverName === "string" && raw.serverName !== "") config.serverName = raw.serverName;
+    if (raw.shellSearch === "avisar" || raw.shellSearch === "bloquear") config.shellSearch = raw.shellSearch;
     return config;
   }
 
-  /** Writes config.json with the current vault path, keeping the settings file and modes already stored. */
-  writeConfig(patch: { configDir?: string; settingsFile?: string; modos?: Record<string, HookMode> } = {}): StateConfig {
+  /** Writes config.json with the current vault path, keeping the settings file, modes and server name already stored. */
+  writeConfig(
+    patch: { configDir?: string; settingsFile?: string; modos?: Record<string, HookMode>; serverName?: string; shellSearch?: ShellSearchMode } = {},
+  ): StateConfig {
     const current = this.readConfig();
     const config: StateConfig = {
       schemaVersion: SCHEMA_VERSION,
@@ -174,6 +187,10 @@ export class StateDir {
     };
     const configDir = patch.configDir ?? current?.configDir;
     if (configDir) config.configDir = configDir;
+    const serverName = patch.serverName ?? current?.serverName;
+    if (serverName) config.serverName = serverName;
+    const shellSearch = patch.shellSearch ?? current?.shellSearch;
+    if (shellSearch) config.shellSearch = shellSearch;
     this.writeJson("config.json", config);
     return config;
   }

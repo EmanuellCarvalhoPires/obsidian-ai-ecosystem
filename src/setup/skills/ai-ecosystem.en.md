@@ -18,7 +18,7 @@ In this order, in one round of up to four questions (the ones in `perguntas` tha
    - `settings.local.json` (Recommended): this machine only, outside git and sync.
    - `settings.json`: shared. Only when the user wants the hooks in git for a team. The commands carry this vault's path and the plugin rewrites the path on each machine when it runs, so everyone needs AI Ecosystem installed.
 3. `modo_hooks` (single choice): how the protection hooks react when the agent tries the wrong path.
-   - `bloquear` (Recommended): denies the call and points to the right tool.
+   - `bloquear` (Recommended): denies the call and points to the right tool. Exception (mixed mode): in AI Vault Search, searches run through Bash or PowerShell only warn, with no deny; Grep and Glob are still denied. To deny the terminal too, store `"shellSearch": "bloquear"` in `.claude/ai-ecosystem/config.json` (default `"avisar"`).
    - `avisar`: lets it through and reminds the right tool.
    - `off`: does nothing.
 4. `claude_md` (single choice): what to do with the vault's `CLAUDE.md`. Look at `claude_md.existe` in the status.

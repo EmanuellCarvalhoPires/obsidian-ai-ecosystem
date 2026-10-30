@@ -27,6 +27,19 @@ describe("hook script: ai-vault-search (Grep and Glob)", () => {
     expect(run.json?.hookSpecificOutput.hookEventName).toBe("PreToolUse");
   });
 
+  it("tells how to load the deferred tools: by keywords without a server name, by select with config.serverName", () => {
+    const first = world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") });
+    expect(first.reason).toContain('ToolSearch query "search find get_section"');
+    world.config({ serverName: "ai-ecosystem-cofre" });
+    world.json("bloqueios.json", {}); // the 2nd identical attempt would pass the repetition lock
+    const second = world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") });
+    expect(second.reason).toContain(
+      "ToolSearch select:mcp__ai-ecosystem-cofre__search,mcp__ai-ecosystem-cofre__find,mcp__ai-ecosystem-cofre__get_section",
+    );
+    world.config({ serverName: "bad name; rm" });
+    expect(world.tool(SEARCH, "Grep", { pattern: "y", path: world.abs("Knowledge") }).reason).toContain("ToolSearch query");
+  });
+
   it("blocks a Grep without path when the working directory is the vault", () => {
     expect(world.tool(SEARCH, "Grep", { pattern: "x" }).decision).toBe("deny");
   });
@@ -86,7 +99,14 @@ describe("hook script: ai-vault-search (shell searches)", () => {
   beforeEach(() => world.module(SEARCH));
   const run = (command: string, tool = "Bash", options: { cwd?: string } = {}) => world.tool(SEARCH, tool, { command }, options);
 
-  it("blocks grep, rg, find and recursive listings in the vault and points to search or list_files", () => {
+  /** A shell search is only a reminder by default (mixed mode): no permission decision. */
+  const warned = (r: ReturnType<typeof run>, label: string) => {
+    expect(r.decision, label).toBeUndefined();
+    expect(r.stdout, label).not.toContain("permissionDecision");
+    expect(r.context, label).toContain("search");
+  };
+
+  it("warns (no deny) about grep, rg, find and recursive listings by default and points to search or list_files", () => {
     for (const command of [
       "grep -rn acesso .",
       "rg acesso Knowledge",
@@ -96,17 +116,55 @@ describe("hook script: ai-vault-search (shell searches)", () => {
       `cd ${slash(world.abs("Knowledge"))} && grep -r x .`,
       "rtk grep -rn x .",
     ]) {
-      expect(run(command).decision, command).toBe("deny");
+      warned(run(command), command);
     }
-    expect(run("grep -rn acesso .").reason).toContain('search {"termos":["acesso"]}');
-    expect(run("find . -name '*.md'").reason).toContain("list_files");
+    expect(run("grep -rn acesso .").context).toContain('search {"termos":["acesso"]}');
+    expect(run("find . -name '*.md'").context).toContain("list_files");
+    expect(run("grep -rn acesso .").context).toContain("ToolSearch");
   });
 
-  it("blocks Select-String and Get-ChildItem -Recurse in PowerShell", () => {
-    expect(run("Select-String -Pattern acesso -Path Knowledge/*.md", "PowerShell").decision).toBe("deny");
-    expect(run("Get-ChildItem -Recurse -Filter *.md", "PowerShell").decision).toBe("deny");
-    expect(run("gci Knowledge -r", "PowerShell").decision).toBe("deny");
-    expect(run("dir /s", "PowerShell").decision).toBe("deny");
+  it("warns about Select-String and Get-ChildItem -Recurse in PowerShell", () => {
+    for (const command of ["Select-String -Pattern acesso -Path Knowledge/*.md", "Get-ChildItem -Recurse -Filter *.md", "gci Knowledge -r", "dir /s"]) {
+      warned(run(command, "PowerShell"), command);
+    }
+  });
+
+  it("denies shell searches when config.shellSearch is bloquear (and still lets the 2nd attempt through)", () => {
+    world.config({ shellSearch: "bloquear" });
+    for (const [tool, command] of [
+      ["Bash", "grep -rn acesso ."],
+      ["Bash", "find . -name '*.md'"],
+      ["PowerShell", "Select-String -Pattern acesso -Path Knowledge/*.md"],
+      ["PowerShell", "gci Knowledge -r"],
+    ] as const) {
+      expect(run(command, tool).decision, command).toBe("deny");
+    }
+    expect(run("grep -rn acesso .").context).toContain("trava de repetição");
+  });
+
+  it("keeps denying Grep and Glob in the default mixed mode, with either shellSearch value", () => {
+    for (const extra of [{}, { shellSearch: "avisar" as const }, { shellSearch: "bloquear" as const }]) {
+      world.config(extra);
+      world.json("bloqueios.json", {});
+      expect(world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") }).decision).toBe("deny");
+      expect(world.tool(SEARCH, "Glob", { pattern: "*.md" }).decision).toBe("deny");
+    }
+  });
+
+  it("mode avisar warns about everything and off disables everything, whatever shellSearch says", () => {
+    world.config({ modos: { [SEARCH]: "avisar" }, shellSearch: "bloquear" });
+    warned(run("grep -rn acesso ."), "avisar shell");
+    expect(world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") }).decision).toBeUndefined();
+    world.config({ modos: { [SEARCH]: "off" }, shellSearch: "bloquear" });
+    expect(run("grep -rn acesso .").stdout).toBe("");
+    expect(world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") }).stdout).toBe("");
+  });
+
+  it("shellSearch does not affect the other modules", () => {
+    world.module(SCRIPTS);
+    world.pastas({ scripts: ["scripts"] });
+    world.config({ shellSearch: "avisar" });
+    expect(world.tool(SCRIPTS, "Bash", { command: "python scripts/x.py" }).decision).toBe("deny");
   });
 
   it("allows a search outside the vault, a filter in a pipe and plain listings", () => {
@@ -286,6 +344,7 @@ describe("hook script: when it steps aside", () => {
     expect(blocked().stdout).toBe("");
     world.json("falhas.json", { [SEARCH]: Date.now() - 11 * 60_000 });
     expect(blocked().decision).toBe("deny");
+    world.json("bloqueios.json", {}); // the 2nd identical attempt would pass the repetition lock
     world.json("falhas.json", { "other-module": Date.now() });
     expect(blocked().decision).toBe("deny");
   });
@@ -362,15 +421,15 @@ describe("hook script: modes and the AI_ECOSYSTEM_HOOKS override", () => {
 describe("hook script: repetition lock", () => {
   beforeEach(() => world.module(SEARCH));
 
-  it("lets the 3rd identical attempt through with a context, then starts over", () => {
+  it("lets the 2nd identical attempt through with a context, then starts over", () => {
     const call = (pattern = "x") => world.tool(SEARCH, "Grep", { pattern, path: world.abs("Knowledge") });
     expect(call().decision).toBe("deny");
-    expect(call().decision).toBe("deny");
-    const third = call();
-    expect(third.decision).toBeUndefined();
-    expect(third.stdout).not.toContain("permissionDecision");
-    expect(third.context).toContain("trava de repetição");
-    expect(third.context).toContain("search");
+    const second = call();
+    expect(second.decision).toBeUndefined();
+    expect(second.stdout).not.toContain("permissionDecision");
+    expect(second.context).toContain("trava de repetição");
+    expect(second.context).toContain("2ª tentativa");
+    expect(second.context).toContain("search");
     expect(call().decision).toBe("deny");
   });
 
@@ -380,15 +439,13 @@ describe("hook script: repetition lock", () => {
     const bash = (command: string) => world.tool(SCRIPTS, "Bash", { command, description: "d" });
     expect(bash("python  scripts/x.py").decision).toBe("deny");
     expect(bash("python scripts/y.py").decision).toBe("deny");
-    expect(bash("python scripts/x.py").decision).toBe("deny");
-    const third = bash("python  scripts/x.py   ");
-    expect(third.decision).toBeUndefined();
-    expect(third.context).toContain("trava de repetição");
+    const second = bash("python scripts/x.py");
+    expect(second.decision).toBeUndefined();
+    expect(second.context).toContain("trava de repetição");
   });
 
   it("forgets attempts older than 10 minutes", () => {
     const call = () => world.tool(SEARCH, "Grep", { pattern: "x", path: world.abs("Knowledge") });
-    call();
     call();
     const locks = world.readJson<Record<string, { n: number; t: number }>>("bloqueios.json") ?? {};
     for (const entry of Object.values(locks)) entry.t -= 11 * 60_000;

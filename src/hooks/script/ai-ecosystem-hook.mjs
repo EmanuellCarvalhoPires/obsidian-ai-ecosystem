@@ -22,7 +22,7 @@ const GUARD_MS = 2000;
 const HEARTBEAT_MAX_AGE_MS = 45_000;
 const FAILURE_TTL_MS = 10 * 60_000;
 const LOCK_WINDOW_MS = 10 * 60_000;
-const LOCK_PASS_ATTEMPT = 3;
+const LOCK_PASS_ATTEMPT = 2;
 const WINDOWS = process.platform === "win32";
 const TYPE = process.argv[3];
 
@@ -40,6 +40,26 @@ const MESSAGES = {
   "ai-git-tools":
     "Para git e para as APIs de GitHub e Bitbucket use as tools do AI Git Tools (git_status, git_commit, git_push, git_pr_criar...).",
 };
+
+const SEARCH_TOOLS = ["search", "find", "get_section"];
+const RUN_TOOLS = ["tools_find", "tools_run"];
+
+/**
+ * One short line telling how to load the (deferred) tools in a single step. The MCP server name comes from
+ * config.serverName when the plugin wrote it; without it the line falls back to a keyword search that needs no name.
+ */
+function loadHint(stateDir, tools) {
+  const config = readJson(stateDir, "config.json");
+  const name = isObject(config) && typeof config.serverName === "string" ? config.serverName.trim() : "";
+  const prefix = /^[A-Za-z0-9_-]+$/.test(name) ? `mcp__${name}__` : "";
+  const how = prefix ? `select:${tools.map((t) => prefix + t).join(",")}` : `query "${tools.join(" ")}"`;
+  return `Se a tool ainda não estiver carregada: ToolSearch ${how}.`;
+}
+
+/** The module message plus the ready call and the load hint. */
+function withHint(env, tools, text) {
+  return `${text} ${loadHint(env.stateDir, tools)}`;
+}
 
 const HTTP_COMMANDS = ["curl", "wget", "invoke-restmethod", "invoke-webrequest", "irm", "iwr"];
 const SCRIPT_RUNNERS = ["python", "python3", "py", "node", "pwsh", "powershell", "bash", "sh"];
@@ -216,10 +236,15 @@ function evaluateProtection(stateDir, moduleId, input) {
   if (!message) return { kind: "allow" };
 
   if (mode === "avisar") return { kind: "remind", message };
+  // Mixed mode: ai-vault-search denies Grep and Glob (exact equivalents) but only warns about Bash and PowerShell
+  // (compound commands), unless config.shellSearch is "bloquear".
+  if (moduleId === "ai-vault-search" && (toolName === "Bash" || toolName === "PowerShell") && config.shellSearch !== "bloquear") {
+    return { kind: "remind", message };
+  }
   return { kind: "block", message };
 }
 
-/** The block mode: the repetition lock may let the 3rd identical attempt through, otherwise the call is denied. */
+/** The block mode: the repetition lock may let the 2nd identical attempt through, otherwise the call is denied. */
 function block(stateDir, input, message) {
   const toolName = typeof input.tool_name === "string" ? input.tool_name : "";
   const toolInput = isObject(input.tool_input) ? input.tool_input : {};
@@ -229,8 +254,8 @@ function block(stateDir, input, message) {
     return allow();
   }
 
-  if (repeatedThreeTimes(stateDir, toolName, toolInput)) {
-    return respond(remind(`Liberado pela trava de repetição (3ª tentativa idêntica em 10 minutos). Prefira o caminho indicado: ${message}`));
+  if (repeatedAttempt(stateDir, toolName, toolInput)) {
+    return respond(remind(`Liberado pela trava de repetição (2ª tentativa idêntica em 10 minutos). Prefira o caminho indicado: ${message}`));
   }
   respond({
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: message },
@@ -262,7 +287,7 @@ function matchRule(moduleId, toolName, toolInput, env) {
     case "ai-templates":
       return templatesRule(toolName, toolInput, env);
     case "ai-git-tools":
-      return gitRule(toolName, toolInput);
+      return gitRule(toolName, toolInput, env);
     default:
       return undefined;
   }
@@ -285,7 +310,7 @@ function vaultSearchRule(toolName, toolInput, env) {
   } else target = env.cwd;
 
   if (!searchesIndexedFolder(target, env, outside)) return undefined;
-  return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`;
+  return withHint(env, SEARCH_TOOLS, `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(toolName, toolInput, relativeKeepCase(target, env))}`);
 }
 
 /** True when the folder is in the vault and not in .claude, the config folder or a folder left out of the index. */
@@ -323,7 +348,7 @@ function shellSearchRule(toolInput, env, outside) {
     const hit = targets.find((p) => searchesIndexedFolder(normalizePath(p, cwd), { ...env, cwd }, outside));
     if (hit === undefined) continue;
     const folder = relativeKeepCase(normalizePath(hit, cwd, true), { ...env, cwd });
-    return `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(search.content ? "Grep" : "Glob", { pattern: search.pattern }, folder)}`;
+    return withHint(env, SEARCH_TOOLS, `${MESSAGES["ai-vault-search"]} ${vaultSearchCall(search.content ? "Grep" : "Glob", { pattern: search.pattern }, folder)}`);
   }
   return undefined;
 }
@@ -419,7 +444,7 @@ function envKeysRule(toolName, toolInput, env) {
   const patterns = isObject(hosts) ? stringList(hosts.hosts) : [];
   if (patterns.length === 0) return undefined;
   for (const url of extractUrls(command)) {
-    if (patterns.some((pattern) => hostMatches(pattern, url))) return `${MESSAGES["environment-variables"]} ${httpCalls(command, url)}`;
+    if (patterns.some((pattern) => hostMatches(pattern, url))) return withHint(env, RUN_TOOLS, `${MESSAGES["environment-variables"]} ${httpCalls(command, url)}`);
   }
   return undefined;
 }
@@ -478,20 +503,20 @@ function hostMatches(pattern, url) {
 // ---- ai-git-tools ----------------------------------------------------------
 
 /** git or gh run from the terminal, or curl and friends against the GitHub and Bitbucket APIs. */
-function gitRule(toolName, toolInput) {
+function gitRule(toolName, toolInput, env) {
   if (toolName !== "Bash" && toolName !== "PowerShell") return undefined;
   const command = typeof toolInput.command === "string" ? toolInput.command : "";
   for (const segment of splitCommands(command)) {
     // The quote-aware tokens catch a quoted path with spaces ("C:/Program Files/Git/bin/git.exe").
     const quoted = tokenize(segment).map((token) => token.toLowerCase());
     for (const words of [commandWords(segment), quoted]) {
-      if (runsGit(words)) return `${MESSAGES["ai-git-tools"]} ${gitCall(words)}`;
+      if (runsGit(words)) return withHint(env, RUN_TOOLS, `${MESSAGES["ai-git-tools"]} ${gitCall(words)}`);
     }
   }
   if (!hasHttpCommand(command)) return undefined;
   for (const url of extractUrls(command)) {
     if (GIT_HOSTS.includes(url.hostname.toLowerCase())) {
-      return `${MESSAGES["ai-git-tools"]} Chamada pronta: tools_find ${JSON.stringify({ modulo: "ai-git-tools", q: url.pathname.includes("pull") ? "pr" : "git" })}.`;
+      return withHint(env, RUN_TOOLS, `${MESSAGES["ai-git-tools"]} Chamada pronta: tools_find ${JSON.stringify({ modulo: "ai-git-tools", q: url.pathname.includes("pull") ? "pr" : "git" })}.`);
     }
   }
   return undefined;
@@ -589,7 +614,7 @@ function scriptsRule(toolName, toolInput, env) {
     if (folders.some((glob) => insideFolder(segments.slice(0, -1), glob))) {
       const args = { path: relativeKeepCase(script.file, { ...env, cwd }) ?? rel };
       if (script.args.length > 0) args.args = script.args;
-      return `${MESSAGES["ai-scripts"]} Chamada pronta: tools_run ${JSON.stringify({ id: "ecosystem_run_script", args })}.`;
+      return withHint(env, RUN_TOOLS, `${MESSAGES["ai-scripts"]} Chamada pronta: tools_run ${JSON.stringify({ id: "ecosystem_run_script", args })}.`);
     }
   }
   return undefined;
@@ -671,7 +696,7 @@ function templatesRule(toolName, toolInput, env) {
   if (fs.existsSync(filePath)) return undefined;
   const target = relativeKeepCase(filePath, env) ?? rel;
   const call = { id: "create_note_from_template", args: { template_id: "<molde>", data: {}, target_path: target } };
-  return `${MESSAGES["ai-templates"]} Chamadas prontas: tools_find ${JSON.stringify({ kind: "template" })} para achar o molde e tools_run ${JSON.stringify(call)}.`;
+  return withHint(env, RUN_TOOLS, `${MESSAGES["ai-templates"]} Chamadas prontas: tools_find ${JSON.stringify({ kind: "template" })} para achar o molde e tools_run ${JSON.stringify(call)}.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,8 +784,8 @@ function canonical(value) {
   return out;
 }
 
-/** Counts this attempt; true (and resets the counter) when it is the 3rd identical one in 10 minutes. */
-function repeatedThreeTimes(stateDir, toolName, toolInput) {
+/** Counts this attempt; true (and resets the counter) when it is the 2nd identical one in 10 minutes. */
+function repeatedAttempt(stateDir, toolName, toolInput) {
   const key = crypto.createHash("sha1").update(toolName + JSON.stringify(canonical(toolInput))).digest("hex");
   const now = Date.now();
   const stored = readJson(stateDir, "bloqueios.json");

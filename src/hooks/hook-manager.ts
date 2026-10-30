@@ -27,6 +27,8 @@ export interface HookManagerDeps {
   vaultBasePath: string;
   /** app.vault.configDir. */
   configDir?: string;
+  /** Current MCP server name (it can change while the plugin runs). */
+  getServerName?: () => string;
   listModules: () => ModuleInfo[];
   listTools: () => RegisteredTool[];
   nodeChecker?: NodeChecker;
@@ -135,7 +137,7 @@ export class HookManager {
       if (this.state.readText(`hooks/${HOOK_SCRIPT_NAME}`) !== HOOK_SCRIPT_SOURCE) {
         this.state.writeText(`hooks/${HOOK_SCRIPT_NAME}`, HOOK_SCRIPT_SOURCE);
       }
-      this.state.writeConfig(this.deps.configDir ? { configDir: this.deps.configDir } : {});
+      this.state.writeConfig(this.configPatch());
       // The rules treat a missing data file as "nothing to guard", so these exist from the start.
       if (!this.state.exists("hosts.json")) this.state.writeHosts([]);
       if (!this.state.exists("pastas.json")) this.state.writePastas({ scripts: [], templates: [], foraDoIndice: [], notasDeTools: [] });
@@ -151,6 +153,31 @@ export class HookManager {
 
   private async settled(): Promise<void> {
     while (this.pending.size > 0) await Promise.all([...this.pending]);
+  }
+
+  /** The fields of config.json that come from the plugin (config folder and MCP server name). */
+  private configPatch(): { configDir?: string; serverName?: string } {
+    const patch: { configDir?: string; serverName?: string } = {};
+    if (this.deps.configDir) patch.configDir = this.deps.configDir;
+    let serverName: string | undefined;
+    try {
+      serverName = this.deps.getServerName?.().trim();
+    } catch {
+      serverName = undefined;
+    }
+    if (serverName) patch.serverName = serverName;
+    return patch;
+  }
+
+  /** Rewrites config.json when the MCP server name changed. Never throws. */
+  syncServerName(): void {
+    if (this.disposed) return;
+    try {
+      const { serverName } = this.configPatch();
+      if (serverName && serverName !== this.state.readConfig()?.serverName) this.state.writeConfig({ serverName });
+    } catch (err) {
+      this.fail(err);
+    }
   }
 
   /** The setup side of the core subscribes here (before start()). */
@@ -417,6 +444,7 @@ export class HookManager {
     if (!node.available) return { ok: false, error: NODE_MISSING };
     try {
       this.state.ensure();
+      this.syncServerName();
       if (!automatic) this.states.setHooksRemovidos(moduleId, false);
       else if (this.states.get(moduleId)?.hooksRemovidos) return { ok: true, changed: false };
       const fallback = defaultMode(moduleId);
@@ -440,6 +468,7 @@ export class HookManager {
     if (!node.available) return { ok: false, error: NODE_MISSING };
     try {
       this.state.ensure();
+      this.syncServerName();
       const result = this.record(this.merger.install(this.state.getSettingsFile(), setupSpecs(moduleId)));
       this.deps.onChange?.();
       return result;
@@ -503,6 +532,7 @@ export class HookManager {
 
   setMode(moduleId: string, mode: HookMode): void {
     try {
+      this.syncServerName();
       this.state.setMode(moduleId, mode);
     } catch (err) {
       this.fail(err);
@@ -516,7 +546,7 @@ export class HookManager {
     try {
       const current = this.state.getSettingsFile();
       const result = this.record(this.merger.move(current, file));
-      if (result.ok) this.state.writeConfig({ settingsFile: file });
+      if (result.ok) this.state.writeConfig({ settingsFile: file, ...this.configPatch() });
       this.deps.onChange?.();
       return result;
     } catch (err) {

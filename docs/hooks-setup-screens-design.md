@@ -28,7 +28,7 @@ O plugin escreve com `node:fs` (pasta oculta: o adapter do Obsidian não a vê).
 
 | Arquivo | Formato |
 | --- | --- |
-| `config.json` | `{ "schemaVersion": 1, "vaultPath": "C:/.../Cofre", "settingsFile": "settings.local.json", "modos": { "<moduleId>": "bloquear" \| "avisar" \| "off" } }` (modo ausente = `bloquear`) |
+| `config.json` | `{ "schemaVersion": 1, "vaultPath": "C:/.../Cofre", "settingsFile": "settings.local.json", "modos": { "<moduleId>": "bloquear" \| "avisar" \| "off" } }` (modo ausente = `bloquear`). Campo opcional `"shellSearch": "avisar" \| "bloquear"` (padrão `avisar`): só vale para `ai-vault-search` em modo `bloquear`; Bash e PowerShell só avisam (additionalContext) e Grep/Glob continuam negados. Com `"bloquear"` o terminal também é negado. Modos `avisar` e `off` ignoram o campo. |
 | `heartbeat` | texto com `Date.now()`; regravado a cada 15 s; apagado no `onunload`; "morto" se ausente ou > 45 s |
 | `hosts.json` | `{ "hosts": ["acme.atlassian.net", "*.atlassian.net", "api.github.com/repos/acme"] }` — padrões `host[/prefixo]`, sem nomes de secret e sem valores |
 | `pastas.json` | `{ "scripts": ["scripts"], "templates": ["Knowledge/Logs/*.md"], "foraDoIndice": ["Anexos"], "notasDeTools": ["MCP"] }` — globs relativos ao cofre (`*` = um segmento, `**` = vários) |
@@ -78,7 +78,7 @@ Regras gerais: só `node:fs`, `node:path`, `node:crypto`; sem rede; lê só os a
 3. `falhas.json[<modulo>]` com menos de 10 min → libera.
 4. Modo (`AI_ECOSYSTEM_HOOKS` > `config.modos[<modulo>]` > `bloquear`); `off` → libera.
 5. Aplica a regra do módulo (4.2). Se não casar → libera sem saída.
-6. Casou: `avisar` → só `additionalContext` com a mensagem (sem `permissionDecision`). `bloquear` → trava de repetição: hash sha1 de `tool_name` + `JSON.stringify(tool_input)` normalizado (chaves ordenadas, espaços colapsados em `command`); se esta for a 3ª tentativa idêntica em 10 min → só `additionalContext` ("liberado pela trava de repetição; prefira ...") e zera o contador; senão incrementa e devolve `deny` com a mensagem.
+6. Casou: `avisar` → só `additionalContext` com a mensagem (sem `permissionDecision`). `bloquear` → trava de repetição: hash sha1 de `tool_name` + `JSON.stringify(tool_input)` normalizado (chaves ordenadas, espaços colapsados em `command`); se esta for a 2ª tentativa idêntica em 10 min → só `additionalContext` ("liberado pela trava de repetição; prefira ...") e zera o contador; senão incrementa e devolve `deny` com a mensagem.
 
 ### 4.2 Regras por módulo
 

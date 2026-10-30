@@ -214,6 +214,36 @@ describe("HookManager.start", () => {
     expect(fs.existsSync(path.join(root, "backups"))).toBe(true);
   });
 
+  it("stores the MCP server name in config.json and follows renames", async () => {
+    let name = "meu-cofre";
+    const manager = await started({ getServerName: () => name });
+    expect(state("config.json").serverName).toBe("meu-cofre");
+    name = "outro nome!";
+    manager.syncServerName();
+    expect(state("config.json")).toMatchObject({ serverName: "outro nome!", schemaVersion: 1, modos: {} });
+    name = "novo-nome";
+    manager.setMode("ai-scripts", "avisar");
+    expect(state("config.json")).toMatchObject({ serverName: "novo-nome", modos: { "ai-scripts": "avisar" } });
+  });
+
+  it("keeps config.shellSearch written by hand across rewrites of config.json", async () => {
+    const manager = await started();
+    const file = path.join(vault, ".claude", "ai-ecosystem", "config.json");
+    fs.writeFileSync(file, JSON.stringify({ ...state("config.json"), shellSearch: "bloquear" }));
+    manager.setMode("ai-scripts", "avisar");
+    expect(state("config.json")).toMatchObject({ shellSearch: "bloquear", modos: { "ai-scripts": "avisar" } });
+    fs.writeFileSync(file, JSON.stringify({ ...state("config.json"), shellSearch: "nonsense" }));
+    manager.setMode("ai-scripts", "off");
+    expect(state("config.json").shellSearch).toBeUndefined();
+  });
+
+  it("keeps the stored server name when no getter is given", async () => {
+    await started({ getServerName: () => "meu-cofre" });
+    managers[0]!.dispose();
+    await started();
+    expect(state("config.json").serverName).toBe("meu-cofre");
+  });
+
   it("restores the script when it was changed, and keeps the stored modes and settings file", async () => {
     await started();
     const script = path.join(vault, ".claude", "ai-ecosystem", "hooks", "ai-ecosystem-hook.mjs");

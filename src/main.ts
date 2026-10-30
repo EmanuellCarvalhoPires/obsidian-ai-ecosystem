@@ -88,6 +88,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
       onStatusChange: (status) => this.onServerStatus(status),
       onRegistryChange: () => this.refreshUiSoon(),
       configDir: this.app.vault.configDir,
+      getServerName: () => this.getServerName(),
       isPluginEnabled: (id) => this.isPluginEnabled(id),
       onHooksChange: () => this.refreshUiSoon(),
       language: currentLanguage,
@@ -313,6 +314,7 @@ export default class AIEcosystemPlugin extends Plugin implements SettingsHost {
     }
     this.settings.mcpServerName = trimmed;
     await this.saveSettings();
+    this.core.hooks?.syncServerName();
     await this.reconnectIntegrations();
     this.refreshUiSoon();
   }

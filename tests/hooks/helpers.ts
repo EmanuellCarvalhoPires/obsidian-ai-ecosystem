@@ -74,7 +74,7 @@ export class HookWorld {
     }
   }
 
-  config(extra: { modos?: Record<string, HookMode>; configDir?: string }): void {
+  config(extra: { modos?: Record<string, HookMode>; configDir?: string; serverName?: string; shellSearch?: "avisar" | "bloquear" }): void {
     this.json("config.json", { schemaVersion: 1, vaultPath: slash(this.vault), settingsFile: "settings.local.json", modos: {}, ...extra });
   }
 

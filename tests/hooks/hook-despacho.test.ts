@@ -205,15 +205,14 @@ describe("despacho: combining the modules", () => {
     expect(despacho("Grep", grep).stdout).toBe("");
   });
 
-  it("lets the 3rd identical attempt through with the reminder, like the separate hooks", () => {
+  it("lets the 2nd identical attempt through with the reminder, like the separate hooks", () => {
     world.module(SCRIPTS);
     const call = () => despacho("Bash", { command: "python scripts/x.py" });
     expect(call().decision).toBe("deny");
-    expect(call().decision).toBe("deny");
-    const third = call();
-    expect(third.decision).toBeUndefined();
-    expect(third.stdout).not.toContain("permissionDecision");
-    expect(third.context).toContain("Liberado pela trava de repetição");
+    const second = call();
+    expect(second.decision).toBeUndefined();
+    expect(second.stdout).not.toContain("permissionDecision");
+    expect(second.context).toContain("Liberado pela trava de repetição (2ª tentativa");
     expect(call().decision).toBe("deny");
   });
 

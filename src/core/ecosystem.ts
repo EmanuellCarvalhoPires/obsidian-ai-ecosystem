@@ -76,6 +76,8 @@ export interface EcosystemDeps {
   detector?: BinaryDetector;
   /** app.vault.configDir. */
   configDir?: string;
+  /** Current MCP server name, written to the hooks config (the hook script builds the ToolSearch hint from it). */
+  getServerName?: () => string;
   /** Language of the setup skills and of the usage guide blocks (the Obsidian language). Default: English. */
   language?: () => Lang;
   /** Script folders were added to the allowed list by the guided setup (Obsidian shows a notice). */
@@ -169,6 +171,7 @@ export class Ecosystem {
       this.hooks = new HookManager({
         vaultBasePath: deps.vaultBasePath,
         configDir: deps.configDir,
+        getServerName: deps.getServerName,
         listModules: () => this.registry.listModules(),
         listTools: () => this.registry.listTools(),
         isPluginEnabled: deps.isPluginEnabled,
