@@ -6,6 +6,9 @@ import type { HookPastas, HookMode, ModuleState } from "../../src/hooks/state-di
 import { makeVault, removeVault } from "../runner/helpers";
 
 /** The real hook script of the repository. */
+/** Every protection module on bloquear, so the deny paths can be tested. */
+const BLOQUEAR_TODOS: Record<string, HookMode> = { "ai-vault-search": "bloquear", "environment-variables": "bloquear", "ai-scripts": "bloquear", "ai-templates": "bloquear", "ai-git-tools": "avisar" };
+
 export const HOOK_SCRIPT = fileURLToPath(new URL("../../src/hooks/script/ai-ecosystem-hook.mjs", import.meta.url));
 
 export function slash(p: string): string {
@@ -74,8 +77,9 @@ export class HookWorld {
     }
   }
 
+  /** The tests of the deny messages run every module on bloquear (the real default is avisar); pass modos to change one. */
   config(extra: { modos?: Record<string, HookMode>; configDir?: string; serverName?: string; shellSearch?: "avisar" | "bloquear" }): void {
-    this.json("config.json", { schemaVersion: 1, vaultPath: slash(this.vault), settingsFile: "settings.local.json", modos: {}, ...extra });
+    this.json("config.json", { schemaVersion: 1, vaultPath: slash(this.vault), settingsFile: "settings.local.json", ...extra, modos: { ...BLOQUEAR_TODOS, ...extra.modos } });
   }
 
   /** Writes the heartbeat `ageMs` old; `null` removes the file. */

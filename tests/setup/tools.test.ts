@@ -86,7 +86,7 @@ describe("ecosystem_setup_status", () => {
     expect(pending(status)).toEqual(["agentes", "arquivo_settings", "modo_hooks", "claude_md"]);
     const mode = (status.perguntas as Array<any>).find((q) => q.chave === "modo_hooks");
     expect(mode.pergunta).toContain("hooks de proteção");
-    expect(mode.opcoes[0]).toMatchObject({ valor: "bloquear", rotulo: "Bloquear", recomendada: true });
+    expect(mode.opcoes[0]).toMatchObject({ valor: "avisar", rotulo: "Avisar", recomendada: true });
     const claudeMd = (status.perguntas as Array<any>).find((q) => q.chave === "claude_md");
     expect(claudeMd.opcoes.map((o: any) => o.valor)).toEqual(["criar", "recusado"]);
   });
@@ -120,7 +120,7 @@ describe("ecosystem_setup_status", () => {
       { pasta: "misc", arquivos: 1, linguagens: ["node"] },
     ]);
     expect(nucleo.hooks).toMatchObject({ arquivo_settings: "settings.local.json", node: true });
-    expect(nucleo.hooks.modos).toEqual({ "ai-vault-search": "bloquear", "environment-variables": "bloquear", "ai-scripts": "bloquear", "ai-templates": "bloquear", "ai-git-tools": "avisar" });
+    expect(nucleo.hooks.modos).toEqual({ "ai-vault-search": "avisar", "environment-variables": "avisar", "ai-scripts": "avisar", "ai-templates": "avisar", "ai-git-tools": "avisar" });
     expect(JSON.stringify(nucleo)).not.toMatch(/tokenHash|Bearer/);
   });
 
@@ -226,6 +226,7 @@ describe("ecosystem_setup_save: core keys", () => {
       "environment-variables": "avisar",
       "ai-scripts": "avisar",
       "ai-templates": "avisar",
+      "ai-git-tools": "avisar",
     });
 
     await installFromCatalog(r, "ai-scripts", "AI Scripts");
@@ -237,15 +238,15 @@ describe("ecosystem_setup_save: core keys", () => {
     expect((await setupSave(r, "ai-ecosystem", "modo_hooks", "talvez")).isError).toBe(true);
   });
 
-  it("keeps AI Git Tools on its own default (avisar) when the core picks bloquear, until the module answers", async () => {
+  it("applies the mode of the core round to AI Git Tools too", async () => {
     const r = await startRig();
     await configureCore(r); // modo_hooks "bloquear" for every module
     expect(stateFile(r, "config.json").modos["ai-scripts"]).toBe("bloquear");
-    expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBeUndefined();
+    expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBe("bloquear");
 
     await installFromCatalog(r, "ai-git-tools", "AI Git Tools");
     expect((await callTool(r, "ecosystem_setup_complete", { modulo: "ai-git-tools" })).isError).toBe(false);
-    expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBe("avisar");
+    expect(stateFile(r, "config.json").modos["ai-git-tools"]).toBe("bloquear");
     expect(hasProtection(r, "ai-git-tools")).toBe(true);
     expect(hasHook(r, "ai-ecosystem", "despacho")).toBe(true);
     expect(hookCommands(r).some((c: string) => c.endsWith("ai-git-tools aprovacao"))).toBe(false);

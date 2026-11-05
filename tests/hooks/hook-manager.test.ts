@@ -579,10 +579,10 @@ describe("protection hooks of a module", () => {
     expect(JSON.stringify(settings())).toContain("ai-ecosystem falha");
   });
 
-  it("writes the default mode avisar of AI Git Tools explicitly, and plans its protection entry", async () => {
+  it("runs every module on the default avisar without writing it, and plans its protection entry", async () => {
     const manager = await started();
     expect(manager.state.getMode("ai-git-tools")).toBe("avisar");
-    expect(manager.state.getMode("ai-scripts")).toBe("bloquear");
+    expect(manager.state.getMode("ai-scripts")).toBe("avisar");
     expect(state("config.json").modos["ai-git-tools"]).toBeUndefined();
 
     const plan = await manager.planInstall("ai-git-tools");
@@ -591,12 +591,12 @@ describe("protection hooks of a module", () => {
     ]);
 
     expect((await manager.installProtection("ai-git-tools")).ok).toBe(true);
-    expect(state("config.json").modos).toEqual({ "ai-git-tools": "avisar" });
+    expect(state("config.json").modos).toEqual({});
     // A mode chosen before is never replaced.
     manager.setMode("ai-git-tools", "bloquear");
     await manager.installProtection("ai-git-tools");
     expect(state("config.json").modos["ai-git-tools"]).toBe("bloquear");
-    // Other modules keep an implicit "bloquear".
+    // Other modules keep an implicit "avisar".
     await manager.installProtection("ai-scripts");
     expect(state("config.json").modos["ai-scripts"]).toBeUndefined();
   });

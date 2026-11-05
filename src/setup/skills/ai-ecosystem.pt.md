@@ -18,8 +18,8 @@ Nesta ordem, em uma rodada de até quatro perguntas (as de `perguntas` que ainda
    - `settings.local.json` (Recomendado): só nesta máquina, fora do git e da sincronização.
    - `settings.json`: compartilhado. Só quando o usuário quer os hooks no git para uma equipe. Os comandos levam o caminho deste cofre e o plugin reescreve o caminho em cada máquina quando roda, então cada pessoa precisa do AI Ecosystem instalado.
 3. `modo_hooks` (uma escolha): como os hooks de proteção reagem quando o agente tenta o caminho errado.
-   - `bloquear` (Recomendado): nega a chamada e aponta a tool certa. Exceção (modo misto): no AI Vault Search, buscas feitas por Bash ou PowerShell só avisam, sem negar; Grep e Glob continuam negados. Para negar também o terminal, grave `"shellSearch": "bloquear"` em `.claude/ai-ecosystem/config.json` (padrão `"avisar"`).
-   - `avisar`: deixa passar e lembra a tool certa.
+   - `avisar` (Recomendado, padrão de todos os módulos): deixa passar e lembra a tool certa.
+   - `bloquear`: nega a chamada e aponta a tool certa. Exceção (modo misto): no AI Vault Search, buscas feitas por Bash ou PowerShell só avisam, sem negar; Grep e Glob continuam negados. Para negar também o terminal, grave `"shellSearch": "bloquear"` em `.claude/ai-ecosystem/config.json` (padrão `"avisar"`).
    - `off`: não faz nada.
 4. `claude_md` (uma escolha): o que fazer com o `CLAUDE.md` do cofre. Olhe `claude_md.existe` no status.
    - Se o arquivo existe: **Atualizar o existente** (Recomendado), que grava o valor `permitido`; **Criar do zero**, que também grava `permitido` e segue a seção "CLAUDE.md do cofre"; ou **Não mexer**, que grava `recusado`.

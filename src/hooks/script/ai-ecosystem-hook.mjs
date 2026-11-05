@@ -27,7 +27,7 @@ const WINDOWS = process.platform === "win32";
 const TYPE = process.argv[3];
 
 /** Mode of a module with no entry in config.modos (same table as defaultMode in state-dir.ts). */
-const DEFAULT_MODES = { "ai-git-tools": "avisar" };
+const DEFAULT_MODES = {};
 
 const MESSAGES = {
   "ai-vault-search":
@@ -272,7 +272,7 @@ function resolveMode(config, moduleId) {
   if (override === "off" || override === "avisar" || override === "bloquear") return override;
   const own = isObject(config.modos) ? config.modos[moduleId] : undefined;
   if (own === "off" || own === "avisar" || own === "bloquear") return own;
-  return DEFAULT_MODES[moduleId] ?? "bloquear";
+  return DEFAULT_MODES[moduleId] ?? "avisar";
 }
 
 /** Returns the message when the module rule matches the tool call, otherwise undefined. */

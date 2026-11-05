@@ -149,8 +149,8 @@ function coreQuestions(ctx: QuestionContext): Question[] {
       pergunta: { pt: "Como os hooks de proteção devem reagir ao caminho errado?", en: "How should the protection hooks react to the wrong path?" },
       tipo: "unica",
       opcoes: [
-        { valor: "bloquear", rotulo: { pt: "Bloquear", en: "Block" }, recomendada: true },
-        { valor: "avisar", rotulo: { pt: "Avisar", en: "Warn" } },
+        { valor: "avisar", rotulo: { pt: "Avisar", en: "Warn" }, recomendada: true },
+        { valor: "bloquear", rotulo: { pt: "Bloquear", en: "Block" } },
         { valor: "off", rotulo: { pt: "Desligado", en: "Off" } },
       ],
       salvar: true,

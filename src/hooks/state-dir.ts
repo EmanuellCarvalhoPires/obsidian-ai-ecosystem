@@ -14,14 +14,12 @@ export const DEFAULT_SETTINGS_FILE = "settings.local.json";
 export const SETTINGS_FILES = ["settings.local.json", "settings.json"] as const;
 const SCHEMA_VERSION = 1;
 
-/** Mode of a module with no entry in config.modos. Modules not listed here default to "bloquear". */
-const MODULE_DEFAULT_MODES: Record<string, HookMode> = {
-  "ai-git-tools": "avisar",
-};
+/** Mode of a module with no entry in config.modos. Modules not listed here default to "avisar". */
+const MODULE_DEFAULT_MODES: Record<string, HookMode> = {};
 
 /** The mode a module's protection hook has until the user picks one (the hook script uses the same table). */
 export function defaultMode(moduleId: string): HookMode {
-  return MODULE_DEFAULT_MODES[moduleId] ?? "bloquear";
+  return MODULE_DEFAULT_MODES[moduleId] ?? "avisar";
 }
 
 export type ShellSearchMode = "avisar" | "bloquear";
@@ -40,7 +38,7 @@ export interface StateConfig {
    * "avisar" (default, a reminder only; Grep and Glob are still denied) or "bloquear" (deny them too).
    */
   shellSearch?: ShellSearchMode;
-  /** Missing mode means the module default (see defaultMode: "bloquear" for most modules). */
+  /** Missing mode means the module default (see defaultMode: "avisar" for every module). */
   modos: Record<string, HookMode>;
 }
 

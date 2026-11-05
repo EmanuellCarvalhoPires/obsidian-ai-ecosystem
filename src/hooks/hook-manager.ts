@@ -14,7 +14,7 @@ import { NodeChecker } from "./node-check";
 import type { NodeStatus } from "./node-check";
 import { SettingsMerger } from "./settings-merger";
 import type { InstalledEntry } from "./settings-merger";
-import { SETTINGS_FILES, StateDir, defaultMode } from "./state-dir";
+import { SETTINGS_FILES, StateDir } from "./state-dir";
 import type { HookMode, ModuleOrigin } from "./state-dir";
 
 /** Seconds-level delay before a module that left the registry is checked for "disabled by the user". */
@@ -434,8 +434,7 @@ export class HookManager {
   /**
    * Writes the permanent entries of a module: its protection entry and, for AI Git Tools, the
    * merge approval entry (the user asked for it, or the core does it for a legacy module or at the
-   * end of the setup). A module whose default mode is not "bloquear" gets that mode written
-   * explicitly in config.modos when none was chosen yet.
+   * end of the setup). A module with no mode chosen runs on the default (avisar).
    */
   async installProtection(moduleId: string, automatic = false): Promise<HookActionResult> {
     const specs = moduleHookSpecs(moduleId);
@@ -447,8 +446,6 @@ export class HookManager {
       this.syncServerName();
       if (!automatic) this.states.setHooksRemovidos(moduleId, false);
       else if (this.states.get(moduleId)?.hooksRemovidos) return { ok: true, changed: false };
-      const fallback = defaultMode(moduleId);
-      if (fallback !== "bloquear" && !this.state.hasExplicitMode(moduleId)) this.state.setMode(moduleId, fallback);
       const file = this.state.getSettingsFile();
       const dispatcher = this.merger.install(file, [DISPATCH_SPEC]);
       if (!dispatcher.ok) return this.record(dispatcher);
